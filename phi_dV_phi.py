@@ -37,14 +37,9 @@ class Lifetime(object):
 		self.wavecoef()
 		if (self.test): print('Creating Lifetime ', end='', flush=True)
 
-		self.calc = Vasp(restart=True)
-		if (self.test): print(' VASP readed, ', end='', flush=True)
 
 		self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
 		if (self.test): print('CHGCAR readed, ', end='', flush=True)
-
-		# size of cell in real space
-		self.cell = np.array(self.CHGCAR.atoms[0].cell)
 
 		#size of the grid in CHGCAR
 		self.charge = self.CHGCAR.chg[0]
@@ -54,7 +49,13 @@ class Lifetime(object):
 		self.dr = np.array(1.0/self.r)
 
 		# calculate divergence of scattering potential
-		self.divcharge = self.div()
+		#self.divcharge = self.div()
+
+		self.calc = Vasp(restart=True)
+		if (self.test): print(' VASP readed, ', end='', flush=True)
+
+		# size of cell in real space
+		self.cell = np.array(self.calc.atoms.cell)
 		self.ikpt = self.calc.get_ibz_kpoints()
 		self.nikpt = self.ikpt.shape[0]
 		self.nbands = self.calc.get_number_of_bands()
@@ -347,10 +348,20 @@ class Lifetime(object):
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		return T
 
+	def DDelta(self, x, sigma):
+		"Dirac delta function in a form of Haussian"
+		return 1/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
+
+	def getibzn(self, k):
+		"Plug for mapping full Brilluen zone k-number to irreducible BZ"
+		return 0
+
+	def dFde(self,k,n):
+		"Pluf for derivative of Fermi distribution"
+		return 1.0
 
 	def R(self,ki, ni, kf, nf):
 		"Calculate scattering rate matrix element"
-
 		ei = self.ene[ki][ni]
 		ef = self.ene[kf][nf]
 		#RR = ( 2 * pi / hbar ) * pow(self.T(ni,ki,nf,kf),2) * DiracDelta(ef - ei)
@@ -359,54 +370,90 @@ class Lifetime(object):
 		#return R
 		return
 
-
-	def invlifetime(self,kf,nf):
+	def lifetime(self,kf,nf):
 		"Get inverse lifetime for state n, k"
 		# defect dencity
-		nd = 1
-	
-		# initial value for inverse t
-		invt = 0.0
+		nd = 1.0
 
-		# step of K-mesh in reciprocal space
-		# dkix = dxiy = dkiz = 2 * pi / kmax;
-		
-		costheta = 0
+		# initial value for inverse t
+		inv_t = 0.0
+
+		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
+		kx = ky = kz = 6
+		dkx = 2 * pi / self.cell[0][0] / kx
+		dky = 2 * pi / self.cell[1][1] / ky
+		dkz = 2 * pi / self.cell[2][2] / kz
+
+		# normalization so integral dkx*dky*dkz*Delta = 1
+		sigma =  pow(2 * pi, 2.5) / (self.cell[0][0] * self.cell[1][1] * self.cell[2][2])
 
 		# loop over all energy levels
-		for ni in range(nf-1):
-			# loop over irreducible k-points
-			for ki in range(kf-1):
-				ei = self.ene[ki][ni]
-				ef = self.ene[kf][nf]
-				if  ei == ef :
-					#if ki != kf or ni != nf:
-					print(ni,ki,nf,kf)
-					#self.R(ni,ki,nf,kf)
-			"""
-			# loop over k-points
-			for kix in range(kmax[0]):
-				for kiy in range(kmax[1]):
-					for kiz in range(kmax[2]):
-						# angle between vectors v(ni,ki) and v(nf,kf) have to be implemented
-						#a = v(ni,ki)
-						#b = v(nf,kf)
-						#costheta=np.dot(a,b)/(LA.norm(a)*LA.norm(b))
-						#weight of ki
-						#wki = 1
-						ki = k[kix,kiy,kiz]
-						#invt += wki * (dkix*dkiy*dkiz)/pow(2.0*pi,3) * R(ki,ni,kf,nf) * (1.0 - costheta)
-						R(ki,ni,kf,nf)
-			"""
-		#return nd * invt
-		return
-	
+		for ni in range(self.nbands):
+			#
+			inv_t_n = 0.0
+			#for ki in range(self.nikpt):
+			# loop over all k-points
+			for ki in range(kx*ky*kz):
+
+				# 1 check for no self-scattering
+				if (ki == kf and ni == nf): continue
+
+				# 2 get FBZ - IBZ number correspondance
+				iki = self.getibzn(ki)
+				ikf = self.getibzn(kf)
+
+				# 3 find if we in proximity of Ef
+				if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
+
+				# 4 get FBZ - interpolated FBZ numbet correspondence for group velocity
+				#a = self.vel[ki][ni]
+				#b = self.vel[kf][nf]
+				#costheta=np.dot(a,b)/(LA.norm(a)*LA.norm(b))
+				costheta = 0.0
+
+				# get eigenstates
+				ei = self.ene[iki][ni]
+				ef = self.ene[ikf][nf]
+
+				inv_t_n += pow(self.T(ki,ni,kf,nf),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
+
+			print(inv_t_n)
+			inv_t += nd * (2*pi/hbar) / pow(2*pi,3.0) * inv_t_n
+
+		return 1.0/inv_t
+
 	def mobility(self):
+		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
+		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
+		kx = ky = kz = 6
+		dkx = 2 * pi / self.cell[0][0] / kx
+		dky = 2 * pi / self.cell[1][1] / ky
+		dkz = 2 * pi / self.cell[2][2] / kz
+
+		# carrier concentration
+		ncarr = 1.0
+
+		# electron charge
+		e = 1.0
+
+		mob = 0.0
 		for nf in range(self.nbands):
-			# loop over irreducible k-points
-			for kf in range(self.nikpt):
-				self.invlifetime(kf,nf)
-		return
+			# loop over all k-points
+			for kf in range(kx*ky*kz):
+
+				# 2 get FBZ - IBZ number correspondance
+				ikf = self.getibzn(kf)
+				# 3 find if we in proximity of Ef
+				if (self.occ[ikf][nf] == 0.0 or self.occ[ikf][nf]==2.0): continue
+
+				# projection of group velocity on field direction
+				proj1 = np.dot(self.vel[ikf][ikf],[1,0,0])
+				# projection of group velocity on current direction
+				proj2 = np.dot(self.vel[ikf][ikf],[1,0,0])
+
+				mob += self.lifetime(kf,nf) * self.dFde(kf,nf) * np.dot(proj1,proj2)
+
+		return -e / ncarr * pow(2*pi/(dkx*dky*dkz),3.0)
 
 def main(nf = 0, kf = 0):
 
