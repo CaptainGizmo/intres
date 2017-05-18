@@ -21,10 +21,10 @@ class Lifetime(object):
 			# assign memory
 			self.occ   = np.empty([nspin,nkpt,nband], dtype = 'float64')
 			self.cener = np.empty([nspin,nkpt,nband], dtype = 'complex128')
-			self.igall = np.empty([nspin,nkpt,npmax,3],dtype='i')
-			self.coeff = np.empty([nspin,nkpt,nband,npmax],dtype='complex64')
-			self.kpt   = np.empty([nspin,nkpt,3],dtype='f')
-			self.nplane = np.empty([nspin,nkpt],dtype='i')
+			self.igall = np.empty([nspin,nkpt,npmax,3],dtype='int_')
+			self.coeff = np.empty([nspin,nkpt,nband,npmax],dtype='complex128')
+			self.kpt   = np.empty([nspin,nkpt,3],dtype='float64')
+			self.nplane = np.empty([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
 			self.nband = nband
 
@@ -50,7 +50,7 @@ class Lifetime(object):
 		self.charge = self.CHGCAR.chg[0]
 
 		# number of points in CHGCAR gives points for integral in RS
-		self.r = np.array(self.charge.shape, dtype=int)
+		self.r = np.array(self.charge.shape, dtype='int_')
 		self.dr = np.array(1.0/self.r)
 
 		# calculate divergence of scattering potential
@@ -60,7 +60,7 @@ class Lifetime(object):
 		self.nbands = self.calc.get_number_of_bands()
 
 		# "empty" 2D array of energies for each IKP
-		self.ene = np.empty([self.nikpt,self.nbands],dtype=float)
+		self.ene = np.empty([self.nikpt,self.nbands],dtype='float64')
 		#occup = calc.read_occupation_numbers(k)
 
 		# reading energies for each IKP
@@ -108,7 +108,7 @@ class Lifetime(object):
 
 		nkpt = int(nkpt_)
 		nband = int(nband_)
-		ecut = ecut_
+		ecut = float(ecut_)
 
 		if (self.test):
 			print('Nuber of K-points',nkpt)
@@ -250,12 +250,9 @@ class Lifetime(object):
 		f.close()
 		return
 
-
-
-
 	def div(self):
 		"Calculate the divergence of the charge dencity"
-		div = np.empty(self.r,dtype=float)
+		div = np.empty(self.r,dtype='float64')
 		dr = np.empty(3)
 		dr[0] = self.dr[0]*self.cell[0][0]
 		dr[1] = self.dr[1]*self.cell[1][1]
@@ -293,7 +290,6 @@ class Lifetime(object):
 					for z in range(rs[2]):
 						csum = complex(0.,0.)
 						r = np.array([x/rs[0],y/rs[1],z/rs[2]],dtype='f')
-						#print(r)
 						for iplane in range(self.wf.nplane[spin][k]):
 							csum += self.wf.coeff[spin][k][n][iplane] * np.exp( 2j * pi * (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(r) )
 						phi[x][y][z] = csum / sqrt(self.wf.Vcell)
@@ -302,18 +298,14 @@ class Lifetime(object):
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
-		if (self.test): print('T')
-
 		T = 0.0
-		
-		s = 12 #scale
-		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int') #number of points in space
-		
-		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
-		phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
-		
-		spin = 0 #non spin-polarized
+		s = 8 #scale
 
+		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
+		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
+		phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
+
+		spin = 0 #non spin-polarized
 		phi.phi_skn(self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
 		phi.phi_skn(self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
 		
@@ -322,21 +314,13 @@ class Lifetime(object):
 		
 		# x y z - indeces of points in the charge array
 		for x in range(int(rs[0])):
-			if (self.test): print ('X =', x, end='\tY = ', flush=True)
 			for y in range(int(rs[1])):
-				if (self.test): print(y, end=' ', flush=True)
 				for z in range(int(rs[2])):
-					# non spin-polarized
-					T += np.conj( phi_i[x][y][z] ) \
-								* self.charge[x*s][y*s][z*s] \
-								* phi_f[x][y][z]
-			if (self.test): print()
+					T += np.conj( phi_i[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_f[x][y][z]
 
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
-
-		if (self.test): print('T(',ki,ni,' -> ',kf,nf,') = ', T)
-
 		return T
+
 
 
 	def R(self,ki, ni, kf, nf):
@@ -405,8 +389,12 @@ def main(nf = 0, kf = 0):
 	qwe = Lifetime(debug)
 	
 	#qwe.mobility()
-	qwe.T(0,0,1,0)
-	#qwe.T1(0,0,1,0)
+
+	ki = 0
+	ni = 0
+	kf = 1
+	nf = 0
+	print('T(',ki,ni,' -> ',kf,nf,') = ', qwe.T(ki,ni,kf,nf))
 
 	return 0
 

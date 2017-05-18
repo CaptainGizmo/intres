@@ -1,56 +1,68 @@
 # cython: cdivision=True
-import cython
+cimport cython
+cimport openmp
+from cython.parallel cimport *
+from libc.math cimport M_PI
+#from libc.math cimport exp
+#import ctypes
 import numpy as np
 cimport numpy as np
-#from scipy.constants import pi
-from libc.math cimport M_PI
-from libc.math cimport exp
-#from cython.parrallel import prange, parallel
+#ctypedef np.complex64_t cpl_t
 
-ctypedef np.complex64_t cpl_t
-
-#def extern from "<complex.h>" namespace "std":
-#	double complex exp(double complex z)
-#	float complex exp(float complex z)  # overload
-
-#cdef extern from "math.h":
-#	double M_PI
-
-cdef extern from "complex.h":
+cdef extern from "complex.h" nogil:
 	double complex cexp(double complex)
 	float complex cexp(float complex)
 
 @cython.boundscheck(False)
-cdef inline cpl_t phi(float [:] kpt, int[:,:] igall, int nplane, cpl_t [:] coeff, float [:] r):
+@cython.wraparound(False)
+cdef complex phi(double* kpt, long * igall, long nplane, complex * coeff, double * r) nogil:
 	cdef:
-		int iplane
-		cpl_t out = 0
-		float [3] k
-
+		long iplane, dim
+		complex out = 0.0
+		double k_r = 0.0
+	
 	for iplane in range(nplane):
-		k[0] = kpt[0] + float(igall[iplane,0])
-		k[1] = kpt[1] + float(igall[iplane,1])
-		k[2] = kpt[2] + float(igall[iplane,2])
-		out += coeff[iplane] * cexp( 2j * M_PI * (k[0]*r[0] + k[1]*r[1] + k[2]*r[2]))
+		# k.dot.r
+		for dim in range(3): k_r += (kpt[dim] + igall[3*iplane+dim]) * r[dim]
+		out += coeff[iplane] * cexp( 2j * M_PI * k_r)
 
 	return out
 
-
 @cython.boundscheck(False)
-def phi_skn(float [:] kpt,int [:,:] igall, int nplane, cpl_t [:] coeff, double Vcell, long [:] rs, cpl_t [:,:,:] phi_out):
+@cython.wraparound(False)
+cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, np.ndarray[long, ndim = 2]  np_igall, long nplane, np.ndarray[complex, ndim = 1]  np_coeff, double Vcell, np.ndarray[long, ndim = 1]  np_rs, complex [:,:,:] phi_out):
+
+	#reshape continious-memory array
+	cdef np.ndarray[long, ndim=2, mode = 'c']    np_buff  = np.ascontiguousarray(np_igall, dtype = long)
+	cdef np.ndarray[complex, ndim=1, mode = 'c'] np_buff2 = np.ascontiguousarray(np_coeff, dtype = complex)
 
 	cdef:
-		cpl_t out = 0
-		int x, y, z
-		float [3] r
+		long x, y, z
+		double [3] r
+		long idx
+		long * igall = <long*> np_buff.data
+		double * kpt = <double*> np_kpt.data
+		complex * coeff = <complex*> np_buff2.data
+		
+		long XMAX = np_rs[0]
+		long YMAX = np_rs[1]
+		long ZMAX = np_rs[2]
+		
+		#np.ndarray[complex,ndim=3] phi_out = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
 
-	for x in range(rs[0]):
-		for y in range(rs[1]):
-			for z in range(rs[2]):
-				# convert indeces to reduced coordinates
-				r[0] = x/float(rs[0])
-				r[1] = y/float(rs[1])
-				r[2] = z/float(rs[2])
-				phi_out[x][y][z] = phi(kpt, igall, nplane, coeff, r) / (Vcell**0.5)
+	with nogil:
+		for idx in prange(XMAX*YMAX*ZMAX,schedule = 'dynamic'):
+			#for idx in  range(XMAX*YMAX*ZMAX):
+			# convert common index to dimention indexes
+			z = idx / (XMAX * YMAX)
+			y = (idx - z * XMAX * YMAX) / XMAX
+			x = (idx - z * XMAX * YMAX) % XMAX
+
+			# convert indeces to reduced coordinates
+			r[0] = x/(XMAX*1.0)
+			r[1] = y/(YMAX*1.0)
+			r[2] = z/(ZMAX*1.0)
+
+			phi_out[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
 
 	return
