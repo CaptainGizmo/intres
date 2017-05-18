@@ -60,18 +60,41 @@ class Lifetime(object):
 		self.nbands = self.calc.get_number_of_bands()
 
 		# "empty" 2D array of energies for each IKP
-		self.ene = np.empty([self.nikpt,self.nbands],dtype='float64')
+		self.iene = np.empty([self.nikpt,self.nbands],dtype='float64')
 		#occup = calc.read_occupation_numbers(k)
 
 		# reading energies for each IKP
 		for k in range(self.nikpt):
-			self.ene[k] = np.array(self.calc.read_eigenvalues(k))
-		if (self.test): print('Energies readed. Done.')
+			self.iene[k] = np.array(self.calc.read_eigenvalues(k))
+		if (self.test): print('Energies for IBZ readed.')
 
+		from vasprun import read_vasprun_xml
+		# we must have only one timestep, so call generator manualy
+		step = read_vasprun_xml().__next__()
+		#step = ase.io.vasp.read_vasp_xml().__next__()
+		#for step in ase.io.vasp.read_vasp_xml():
 
+		self.kpt = step.calc.get_bz_k_points()
+		self.nkpt = self.kpt.shape[0]
+		self.nspins = step.calc.get_number_of_spins()
+		self.nbands = step.calc.get_eigenvalues(0,0).shape[0]
+		print(self.nkpt)
+
+		# "empty" 2D array of energies and group velocities for each IKP
+		self.ene = np.empty([self.nkpt,self.nbands],dtype='float64')
+		self.vel = np.empty([self.nkpt,self.nbands,3],dtype='float64')
+
+		# second parameter is spin, nonmagnetic
+		for k in range(self.nkpt):
+			self.ene[k] = np.array(step.calc.get_eigenvalues(k,0))
+			self.vel[k] = np.array(step.calc.get_occupation_numbers(k,0))
+			# uncomment for the test output 
+			#band = 0
+			#print(k,self.kpt[k],'\tband ',band,'\te =',self.ene[k][band],'\tv =',self.vel[k][band])
+
+		if (self.test): print('Energies and group velocities for full interpolated BZ readed.')
 
 	def wavecoef(self):
-
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
 		#   adjusted in final decimal places to agree with VASP value; program
 		#   checks for discrepancy of any results between this and VASP values)
@@ -250,6 +273,7 @@ class Lifetime(object):
 		f.close()
 		return
 
+
 	def div(self):
 		"Calculate the divergence of the charge dencity"
 		div = np.empty(self.r,dtype='float64')
@@ -283,6 +307,7 @@ class Lifetime(object):
 								 + (self.charge[x][y][zm1]-2.0*self.charge[x][y][z]+self.charge[x][y][zp1])/pow(dr[2],2)
 		return div
 
+
 	def psi_skn(self, rs, spin, k, n, phi):
 			"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
 			for x in range(rs[0]):
@@ -295,11 +320,12 @@ class Lifetime(object):
 						phi[x][y][z] = csum / sqrt(self.wf.Vcell)
 			return
 
+
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
-		s = 8 #scale
+		s = 12 #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
 		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
@@ -320,7 +346,6 @@ class Lifetime(object):
 
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		return T
-
 
 
 	def R(self,ki, ni, kf, nf):
