@@ -326,17 +326,23 @@ class Lifetime(object):
 			print('T')
 
 		T = 0.0
-		for x in range(self.r[0]):
-			print (x)
-			for y in range(self.r[1]):
+		
+		s = 4 #scale
+		rs = self.r/s
+		
+		# r0 r1 r2 - indeces of points of charge array
+		for x in range(int(rs[0])):
+			print ('X = ', x, end='\tY = ', flush=True)
+			for y in range(int(rs[1])):
 				print(y, end=' ', flush=True)
-				for z in range(self.r[2]):
+				for z in range(int(rs[2])):
 					# non spin-polarized
-					phi = self.phi(0,nf,kf,x/self.r[0],y/self.r[1],z/self.r[2])
-					T += np.conj(phi) * self.charge[x][y][z] * phi
+					psi = self.phi(0,ni,ki,x/rs[0],y/rs[1],z/rs[2])      # convert xyz to reduced coordinates
+					phi = self.phi(0,nf,kf,x/rs[0],y/rs[1],z/rs[2])      # convert xyz to reduced coordinates
+					T += np.conj(psi) * self.charge[x*s][y*s][z*s] * phi # unpack xyz to charge array indeces
 			print()
 
-		T *= self.dr[0] * self.dr[1] * self.dr[2]
+		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 
 		if (self.test):
 			print('T(',ki,ni,' -> ',kf,nf,') = ', T)
