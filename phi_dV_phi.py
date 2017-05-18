@@ -12,7 +12,7 @@ from scipy.linalg import *
 from scipy.constants import *
 from sympy import DiracDelta
 from math import sin,cos,asin,acos,sqrt
-from phi import phi
+import phi
 
 class Lifetime(object):
 
@@ -35,36 +35,38 @@ class Lifetime(object):
 		#reading wavefunction
 		#self.wf = 
 		self.wavecoef()
+		if (self.test): print('Creating Lifetime ', end='', flush=True)
 
-		if (self.test):
-			print('Creating Lifetime ', end='', flush=True)
 		self.calc = Vasp(restart=True)
-		if (self.test):
-			print(' VASP readed, ', end='', flush=True)
+		if (self.test): print(' VASP readed, ', end='', flush=True)
+
 		self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
-		if (self.test):
-			print('CHGCAR readed, ', end='', flush=True)
+		if (self.test): print('CHGCAR readed, ', end='', flush=True)
+
 		# size of cell in real space
 		self.cell = np.array(self.CHGCAR.atoms[0].cell)
+
 		#size of the grid in CHGCAR
 		self.charge = self.CHGCAR.chg[0]
+
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype=int)
 		self.dr = np.array(1.0/self.r)
+
 		# calculate divergence of scattering potential
 		self.divcharge = self.div()
 		self.ikpt = self.calc.get_ibz_kpoints()
 		self.nikpt = self.ikpt.shape[0]
 		self.nbands = self.calc.get_number_of_bands()
-		# "empty" 2D array of energies for each IKP, fast initialization
+
+		# "empty" 2D array of energies for each IKP
 		self.ene = np.empty([self.nikpt,self.nbands],dtype=float)
 		#occup = calc.read_occupation_numbers(k)
 
 		# reading energies for each IKP
 		for k in range(self.nikpt):
 			self.ene[k] = np.array(self.calc.read_eigenvalues(k))
-		if (self.test):
-			print('Energies readed. Done.')
+		if (self.test): print('Energies readed. Done.')
 
 
 
@@ -209,16 +211,14 @@ class Lifetime(object):
 				ncnt = 0
 				for ig3 in range(0, 2*nb3max+1):
 					ig3p = ig3
-					if ig3 > nb3max:
-						ig3p = ig3 - 2*nb3max - 1
+					if ig3 > nb3max: ig3p = ig3 - 2*nb3max - 1
+
 					for ig2 in range(0, 2*nb2max+1):
 						ig2p = ig2
-						if ig2 > nb2max:
-							ig2p = ig2 - 2*nb2max - 1
+						if ig2 > nb2max: ig2p = ig2 - 2*nb2max - 1
 						for ig1 in range(0, 2*nb1max+1):
 							ig1p = ig1
-							if ig1 > nb1max :
-								ig1p = ig1 - 2*nb1max - 1
+							if ig1 > nb1max: ig1p = ig1 - 2*nb1max - 1
 
 							sumkg = np.empty([3],dtype='d')
 							for j in range(3):
@@ -265,101 +265,79 @@ class Lifetime(object):
 		#self.charge = pad(indata,(1,1,1),'reflect',reflect_type='odd')
 
 		for x in range(self.r[0]):
-
-			if x == 0:
-				xm1 = self.r[0] - 1
-			else:
-				xm1 = x - 1
-			if x == (self.r[0] - 1):
-				xp1 = 0
-			else:
-				xp1 = x + 1
+			if x == 0: xm1 = self.r[0] - 1
+			else: xm1 = x - 1
+			if x == (self.r[0] - 1): xp1 = 0
+			else: xp1 = x + 1
 
 			for y in range(self.r[1]):
-
-				if y == 0:
-					ym1 = self.r[1] - 1
-				else:
-					ym1 = y - 1
-				if y == (self.r[1] - 1):
-					yp1 = 0
-				else:
-					yp1 = y + 1
+				if y == 0: ym1 = self.r[1] - 1
+				else: ym1 = y - 1
+				if y == (self.r[1] - 1): yp1 = 0
+				else: yp1 = y + 1
 
 				for z in range(self.r[2]):
-
-					if z == 0:
-						zm1 = self.r[2] - 1
-					else:
-						zm1 = z - 1
-					if z == (self.r[2] - 1):
-						zp1 = 0
-					else:
-						zp1 = z + 1
-					
-					#print(xm1,x,xp1,",",ym1,y,yp1,",",zm1,z,zp1)
+					if z == 0: zm1 = self.r[2] - 1
+					else: zm1 = z - 1
+					if z == (self.r[2] - 1): zp1 = 0
+					else: zp1 = z + 1
 					div[x][y][z] = (self.charge[xm1][y][z]-2.0*self.charge[x][y][z]+self.charge[xp1][y][z])/pow(dr[0],2) \
 								 + (self.charge[x][ym1][z]-2.0*self.charge[x][y][z]+self.charge[x][yp1][z])/pow(dr[1],2) \
 								 + (self.charge[x][y][zm1]-2.0*self.charge[x][y][z]+self.charge[x][y][zp1])/pow(dr[2],2)
 		return div
 
-
-	def psi(self, spin, band, k, x, y, z):
-		"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
-		# x y z in partial coordinates: 0..1 (not including 1)
-		if (x<0 or x>=1) or (y<0 or y>=1) or (z<0 or z>=1):
-			sys.exit("PHI(x,y,z): coordinate(s) is not in reduced scale.")
-
-		csum = complex(0.,0.)
-		for iplane in range(self.wf.nplane[spin][k]):
-			csum   += self.wf.coeff[spin][k][band][iplane] \
-					* np.exp( 2.* pi * 1j \
-								* (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(np.array([x,y,z])) \
-							)
-
-		csum /= sqrt(self.wf.Vcell)
-		return csum
-
+	def psi_skn(self, rs, spin, k, n, phi):
+			"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
+			for x in range(rs[0]):
+				for y in range(rs[1]):
+					for z in range(rs[2]):
+						csum = complex(0.,0.)
+						r = np.array([x/rs[0],y/rs[1],z/rs[2]],dtype='f')
+						#print(r)
+						for iplane in range(self.wf.nplane[spin][k]):
+							csum += self.wf.coeff[spin][k][n][iplane] * np.exp( 2j * pi * (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(r) )
+						phi[x][y][z] = csum / sqrt(self.wf.Vcell)
+			return
 
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
-		if (self.test):
-			print('T')
+		if (self.test): print('T')
 
 		T = 0.0
 		
-		s = 6 #scale
-		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int')
+		s = 12 #scale
+		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int') #number of points in space
 		
 		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
 		phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
 		
 		spin = 0 #non spin-polarized
-		phi( self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
-		phi( self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
+
+		phi.phi_skn(self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
+		phi.phi_skn(self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
+		
+		#print(phi_i[0][0][0])
+		#print(phi_f[0][0][0])
 		
 		# x y z - indeces of points in the charge array
 		for x in range(int(rs[0])):
-			if (self.test):
-				print ('X = ', x, end='\tY = ', flush=True)
+			if (self.test): print ('X =', x, end='\tY = ', flush=True)
 			for y in range(int(rs[1])):
-				if (self.test):
-					print(y, end=' ', flush=True)
+				if (self.test): print(y, end=' ', flush=True)
 				for z in range(int(rs[2])):
 					# non spin-polarized
-					T += np.conj( phi_i[int(x/rs[0])][int(y/rs[1])][int(z/rs[2])] ) \
+					T += np.conj( phi_i[x][y][z] ) \
 								* self.charge[x*s][y*s][z*s] \
-								* phi_f[int(x/rs[0])][int(y/rs[1])][int(z/rs[2])] # unpack xyz to charge array indeces
-			if (self.test):
-				print()
+								* phi_f[x][y][z]
+			if (self.test): print()
 
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 
-		if (self.test):
-			print('T(',ki,ni,' -> ',kf,nf,') = ', T)
+		if (self.test): print('T(',ki,ni,' -> ',kf,nf,') = ', T)
 
 		return T
+
 
 	def R(self,ki, ni, kf, nf):
 		"Calculate scattering rate matrix element"
@@ -428,6 +406,7 @@ def main(nf = 0, kf = 0):
 	
 	#qwe.mobility()
 	qwe.T(0,0,1,0)
+	#qwe.T1(0,0,1,0)
 
 	return 0
 
