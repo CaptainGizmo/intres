@@ -37,7 +37,6 @@ class Lifetime(object):
 		self.wavecoef()
 		if (self.test): print('Creating Lifetime ', end='', flush=True)
 
-
 		self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
 		if (self.test): print('CHGCAR readed, ', end='', flush=True)
 
@@ -51,49 +50,27 @@ class Lifetime(object):
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
 
-		self.calc = Vasp(restart=True)
-		if (self.test): print(' VASP readed, ', end='', flush=True)
+		calc = VaspKpointsInterpolated("vasprun.xml")
 
-		# size of cell in real space
-		self.cell = np.array(self.calc.atoms.cell)
-		self.ikpt = self.calc.get_ibz_kpoints()
-		self.nikpt = self.ikpt.shape[0]
-		self.nbands = self.calc.get_number_of_bands()
+		self.cell = calc.cell
+		print("Cell vectors:")
+		print(self.cell)
 
-		# "empty" 2D array of energies for each IKP
-		self.iene = np.empty([self.nikpt,self.nbands],dtype='float64')
-		#occup = calc.read_occupation_numbers(k)
+		self.inkpt = calc.inkpts
+		self.ikpts = calc.ikpts
+		self.iene = calc.ienergies
+		self.ivel = calc.ivelocities
+		self.iocc = calc.ipopulations
 
-		# reading energies for each IKP
-		for k in range(self.nikpt):
-			self.iene[k] = np.array(self.calc.read_eigenvalues(k))
-		if (self.test): print('Energies for IBZ readed.')
+		self.nbands = calc.inbands
 
-		from vasprun import read_vasprun_xml
-		# we must have only one timestep, so call generator manualy
-		step = read_vasprun_xml().__next__()
-		#step = ase.io.vasp.read_vasp_xml().__next__()
-		#for step in ase.io.vasp.read_vasp_xml():
+		self.nkpt = calc.nkpts
+		self.kpts = calc.kpts
+		self.ene = calc.energies
+		self.vel = calc.velocities
 
-		self.kpt = step.calc.get_bz_k_points()
-		self.nkpt = self.kpt.shape[0]
-		self.nspins = step.calc.get_number_of_spins()
-		self.nbands = step.calc.get_eigenvalues(0,0).shape[0]
-		print(self.nkpt)
-
-		# "empty" 2D array of energies and group velocities for each IKP
-		self.ene = np.empty([self.nkpt,self.nbands],dtype='float64')
-		self.vel = np.empty([self.nkpt,self.nbands,3],dtype='float64')
-
-		# second parameter is spin, nonmagnetic
-		for k in range(self.nkpt):
-			self.ene[k] = np.array(step.calc.get_eigenvalues(k,0))
-			self.vel[k] = np.array(step.calc.get_occupation_numbers(k,0))
-			# uncomment for the test output 
-			#band = 0
-			#print(k,self.kpt[k],'\tband ',band,'\te =',self.ene[k][band],'\tv =',self.vel[k][band])
-
-		if (self.test): print('Energies and group velocities for full interpolated BZ readed.')
+		print("Number of k-points in IBZ:",self.inkpt)
+		print("Number of k-points in full BZ:",self.nkpt)
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
