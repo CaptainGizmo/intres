@@ -1,3 +1,5 @@
+#!python3
+#cython: language_level=3, boundscheck=False
 import os,sys,time
 import subprocess
 import struct
@@ -10,10 +12,9 @@ from scipy.linalg import *
 from scipy.constants import *
 from sympy import DiracDelta
 from math import sin,cos,asin,acos,sqrt
-
+from phi import phi
 
 class Lifetime(object):
-
 
 	class wf():
 		def __init__(self,nspin,nkpt,npmax,nband):
@@ -36,7 +37,7 @@ class Lifetime(object):
 		self.wavecoef()
 
 		if (self.test):
-			print('Creating Lifetime, ', end='', flush=True)
+			print('Creating Lifetime ', end='', flush=True)
 		self.calc = Vasp(restart=True)
 		if (self.test):
 			print(' VASP readed, ', end='', flush=True)
@@ -250,21 +251,6 @@ class Lifetime(object):
 		return
 
 
-	def phi(self, spin, band, k, x, y, z):
-		"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
-		# x y z in partial coordinates: 0..1 (not including 1)
-		if (x<0 or x>=1) or (y<0 or y>=1) or (z<0 or z>=1):
-			sys.exit("PHI(x,y,z): coordinate(s) not in reduced scale.")
-
-		csum = complex(0.,0.)
-		for iplane in range(self.wf.nplane[spin][k]):
-			csum   += self.wf.coeff[spin][k][band][iplane] \
-					* np.exp( 2.* pi * 1j \
-								* (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(np.array([x,y,z])) \
-							)
-
-		csum /= sqrt(self.wf.Vcell)
-		return csum
 
 
 	def div(self):
@@ -318,6 +304,22 @@ class Lifetime(object):
 		return div
 
 
+	def psi(self, spin, band, k, x, y, z):
+		"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
+		# x y z in partial coordinates: 0..1 (not including 1)
+		if (x<0 or x>=1) or (y<0 or y>=1) or (z<0 or z>=1):
+			sys.exit("PHI(x,y,z): coordinate(s) is not in reduced scale.")
+
+		csum = complex(0.,0.)
+		for iplane in range(self.wf.nplane[spin][k]):
+			csum   += self.wf.coeff[spin][k][band][iplane] \
+					* np.exp( 2.* pi * 1j \
+								* (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(np.array([x,y,z])) \
+							)
+
+		csum /= sqrt(self.wf.Vcell)
+		return csum
+
 
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
@@ -327,20 +329,30 @@ class Lifetime(object):
 
 		T = 0.0
 		
-		s = 4 #scale
-		rs = self.r/s
+		s = 6 #scale
+		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int')
 		
-		# r0 r1 r2 - indeces of points of charge array
+		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
+		phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex64')
+		
+		spin = 0 #non spin-polarized
+		phi( self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
+		phi( self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
+		
+		# x y z - indeces of points in the charge array
 		for x in range(int(rs[0])):
-			print ('X = ', x, end='\tY = ', flush=True)
+			if (self.test):
+				print ('X = ', x, end='\tY = ', flush=True)
 			for y in range(int(rs[1])):
-				print(y, end=' ', flush=True)
+				if (self.test):
+					print(y, end=' ', flush=True)
 				for z in range(int(rs[2])):
 					# non spin-polarized
-					psi = self.phi(0,ni,ki,x/rs[0],y/rs[1],z/rs[2])      # convert xyz to reduced coordinates
-					phi = self.phi(0,nf,kf,x/rs[0],y/rs[1],z/rs[2])      # convert xyz to reduced coordinates
-					T += np.conj(psi) * self.charge[x*s][y*s][z*s] * phi # unpack xyz to charge array indeces
-			print()
+					T += np.conj( phi_i[int(x/rs[0])][int(y/rs[1])][int(z/rs[2])] ) \
+								* self.charge[x*s][y*s][z*s] \
+								* phi_f[int(x/rs[0])][int(y/rs[1])][int(z/rs[2])] # unpack xyz to charge array indeces
+			if (self.test):
+				print()
 
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 
