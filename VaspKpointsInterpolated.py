@@ -65,6 +65,7 @@ class VaspKpointsInterpolated:
         self.inkpts = None
         self.inbands = None
         self.ipopulations = None
+        self.dk = None
 
         self.energies = None
         self.velocities = None
@@ -113,6 +114,7 @@ class VaspKpointsInterpolated:
 
         # 1) extract information regarding k-point grid
         print("parsing k-point grid information")
+        self.dk = []
         for block in xmldoc.findall("kpoints/generation"):
             if not 'param' in block.attrib:
                 continue
@@ -122,9 +124,14 @@ class VaspKpointsInterpolated:
                     continue
                 if element.attrib['name'] == "divisions":
                     self.kptgrid_divisions = [int(x) for x in element.text.split()]
+                if "genvec" in element.attrib['name']:
+                    dk = []
+                    for v in list(element.text.split()):
+                        dk.append(float(v))
+                    self.dk.append(dk)
+        self.dk = np.array(self.dk)
         print ("k-point grid: ",self.kptgrid_type)
-        for k in self.kptgrid_divisions:
-            print(k)
+        print ("k-point step: ",self.kptgrid_divisions)
         print
 
 
@@ -165,7 +172,7 @@ class VaspKpointsInterpolated:
                        vec = []
                        for v in list(element):
                            vec.append([float(x) for x in v.text.split()])
-                       self.cell.append(vec)
+                       self.cell = vec
         self.cell = np.array(self.cell)
 
         # ======================================================================================
@@ -365,7 +372,7 @@ class VaspKpointsInterpolated:
                     for ib,e in enumerate(en):
                         f.write('%4d %12.4f\n'%(ib+1,e))
         return
-                    
+
 
     def get(self, name):
         """Get attribute."""
@@ -390,10 +397,10 @@ class VaspKpointsInterpolated:
         # procedure adapted from ASE
         def getter(self):
             return self.get(name)
-        
+
         def setter(self, value):
             self.set(name, value)
-            
+
         def deleter(self):
             self.delete(name)
 
