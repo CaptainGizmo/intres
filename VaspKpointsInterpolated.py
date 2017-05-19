@@ -57,7 +57,8 @@ class VaspKpointsInterpolated:
     def __init__(self, filename='vasprun.xml', tolerance=1e-5):
         self.data = d = {}
 
-        self.cell = None
+        self.basis = None
+        self.rec_basis = None
 
         self.ienergies = None
         self.ivelocities = None
@@ -163,7 +164,8 @@ class VaspKpointsInterpolated:
 
         # 3) extract some parameters
         print("extracting cell vectors")
-        self.cell = []
+        self.basis = []
+        self.rec_basis = []
         block = None
         for block in xmldoc.findall("structure"):
             if block.attrib['name'] == 'initialpos':
@@ -172,8 +174,14 @@ class VaspKpointsInterpolated:
                        vec = []
                        for v in list(element):
                            vec.append([float(x) for x in v.text.split()])
-                       self.cell = vec
-        self.cell = np.array(self.cell)
+                       self.basis = vec
+                   if element.attrib['name'] == 'rec_basis':
+                       rec = []
+                       for v in list(element):
+                           rec.append([float(x) for x in v.text.split()])
+                       self.rec_basis = vec
+        self.basis = np.array(self.basis)
+        self.rec_basis = np.array(self.rec_basis)
 
         # ======================================================================================
 

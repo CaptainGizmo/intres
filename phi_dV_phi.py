@@ -1,4 +1,4 @@
-#!python3
+#!/usr/bin/env python3
 #cython: language_level=3, boundscheck=False
 import os,sys,time
 import subprocess
@@ -12,7 +12,10 @@ from scipy.linalg import *
 from scipy.constants import *
 from sympy import DiracDelta
 from math import sin,cos,asin,acos,sqrt
+
 import phi
+from VaspKpointsInterpolated import *
+from ibz2fbz import *
 
 class Lifetime(object):
 
@@ -52,10 +55,12 @@ class Lifetime(object):
 
 		calc = VaspKpointsInterpolated("vasprun.xml")
 
-		self.cell = calc.cell
+		self.cell = calc.basis
 		print("Cell vectors:")
 		print(self.cell)
 
+		# parameters for K-points in IBZ
+		# interpolated, but with scaling factor 1
 		self.inkpt = calc.inkpts
 		self.ikpts = calc.ikpts
 		self.iene = calc.ienergies
@@ -64,6 +69,8 @@ class Lifetime(object):
 
 		self.nbands = calc.inbands
 
+		# parameters for K-points in full BZ
+		# interpolated, but with scaling factor 1
 		self.nkpt = calc.nkpts
 		self.kpts = calc.kpts
 		self.ene = calc.energies
@@ -71,6 +78,10 @@ class Lifetime(object):
 
 		print("Number of k-points in IBZ:",self.inkpt)
 		print("Number of k-points in full BZ:",self.nkpt)
+
+		i2f = ibz2fbz("OUTCAR_itp")
+		self.ibz2fbz = i2f.itpi2f
+		print(self.ibz2fbz)
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
