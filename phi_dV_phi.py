@@ -82,7 +82,7 @@ class Lifetime(object):
 		print("Number of k-points in full BZ interpolated:",self.nkpt)
 
 		# mapping for k-points from IBZ to FBZ
-		i2f = ibz2fbz("OUTCAR_itp")
+		i2f = ibz2fbz("OUTCAR")
 		self.nibz2fbz = i2f.nitpi2f
 		self.ibz2fbz = i2f.itpi2f
 		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings")
@@ -320,7 +320,7 @@ class Lifetime(object):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
-		s = 12 #scale of the charge array
+		s = 1 #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
 		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
@@ -349,7 +349,7 @@ class Lifetime(object):
 		# derivative of Fermi distribution
 		sigma = self.sigma
 		x = self.ene[k][n] - self.fermi
-		return 1/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
+		return -1.0/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
 
 	def lifetime(self,kf,nf):
@@ -401,15 +401,15 @@ class Lifetime(object):
 				# get eigenstates
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf]
-				
 
-				inv_t_n += pow(self.T(ki,ni,kf,nf),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
-
-			print(inv_t_n)
+				inv_t_n += pow(abs(self.T(iki,ni,ikf,nf)),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
 			inv_t += nd * (2*pi/hbar) / pow(2*pi,3.0) * inv_t_n
 
-		if inv_t == 0 : return 0
-		return 1.0/inv_t
+		tau = 0
+		if inv_t != 0 : tau = 1.0/inv_t
+
+		print('t(',kf,nf,') = ',tau,'(1/',inv_t,')')
+		return tau
 
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
@@ -444,25 +444,17 @@ class Lifetime(object):
 				# projection of group velocity on current direction
 				proj2 = np.dot(self.vel[ikf][ikf],[1,0,0])
 
-				lt = self.lifetime(kf,nf)
-				print('(',kf,nf,') = ',lt)
-
-				mob += lt * self.dFde(kf,nf) * np.dot(proj1,proj2)
+				mob += self.lifetime(kf,nf) * self.dFde(kf,nf) * np.dot(proj1,proj2)
 
 		return -e / ncarr * pow(2*pi/(dkx*dky*dkz),3.0)
 
 def main(nf = 0, kf = 0):
 
+	print(pi, e)
 	debug = True
 	qwe = Lifetime(debug)
-	
-	#qwe.mobility()
 
-	ki = 0
-	ni = 0
-	kf = 1
-	nf = 0
-	print('T(',ki,ni,' -> ',kf,nf,') = ', qwe.lifetime(ki,ni,kf,nf))
+	print(qwe.mobility())
 
 	return 0
 
