@@ -59,7 +59,8 @@ class VaspKpointsInterpolated:
 
         self.basis = None
         self.rec_basis = None
-
+        
+        # data for irreducible interpolated
         self.ienergies = None
         self.ivelocities = None
         self.ikpts = None
@@ -67,7 +68,8 @@ class VaspKpointsInterpolated:
         self.inbands = None
         self.ipopulations = None
         self.dk = None
-
+        
+        # data for full interpolated
         self.energies = None
         self.velocities = None
         self.kpts = None
@@ -81,8 +83,8 @@ class VaspKpointsInterpolated:
         self.kinter = None
         self.dos = None
         self.efermi_interpolated = None
+        self.sigma = None
         self.read_data(filename)
-
 
     def __repr__(self):
         return 'I am Munx. Who are you?'
@@ -155,11 +157,14 @@ class VaspKpointsInterpolated:
             if element.attrib['name'] == 'NELECT':
                 self.nelect = float(element.text)
         print("NELECT = ",self.nelect)
+
         for element in xmldoc.findall("parameters/*/*/i"):
             if not 'name' in element.attrib:
                 continue
             if element.attrib['name'] == 'ISPIN':
                 self.ispin = int(element.text)
+            if element.attrib['name'] == 'SIGMA':
+                self.sigma = float(element.text)
         print("ISPIN = ",self.ispin)
 
         # 3) extract some parameters
@@ -235,7 +240,7 @@ class VaspKpointsInterpolated:
             if 'kpoint' in element.attrib['comment']:
                 pop = []
                 for v in list(element):
-                    pop.append([float(x) for x in v.text.split()[1:]])
+                    pop.append(float(v.text.split()[1]))
                 self.ipopulations.append(pop)
 
         self.ienergies = np.array(self.ienergies)

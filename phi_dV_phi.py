@@ -68,6 +68,8 @@ class Lifetime(object):
 		self.iocc = calc.ipopulations
 
 		self.nbands = calc.inbands
+		self.sigma = calc.sigma
+		self.fermi = calc.efermi_interpolated
 
 		# parameters for K-points in full BZ
 		# interpolated, but with scaling factor 1
@@ -76,12 +78,16 @@ class Lifetime(object):
 		self.ene = calc.energies
 		self.vel = calc.velocities
 
-		print("Number of k-points in IBZ:",self.inkpt)
-		print("Number of k-points in full BZ:",self.nkpt)
+		print("Number of k-points in full IBZ interploated:",self.inkpt)
+		print("Number of k-points in full BZ interpolated:",self.nkpt)
 
+		# mapping for k-points from IBZ to FBZ
 		i2f = ibz2fbz("OUTCAR_itp")
+		self.nibz2fbz = i2f.nitpi2f
 		self.ibz2fbz = i2f.itpi2f
-		print(self.ibz2fbz)
+		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings")
+		print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings")
+
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
@@ -323,40 +329,28 @@ class Lifetime(object):
 		spin = 0 #non spin-polarized
 		phi.phi_skn(self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
 		phi.phi_skn(self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
-		
-		#print(phi_i[0][0][0])
-		#print(phi_f[0][0][0])
-		
+
 		# x y z - indeces of points in the charge array
 		for x in range(int(rs[0])):
 			for y in range(int(rs[1])):
 				for z in range(int(rs[2])):
-					T += np.conj( phi_i[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_f[x][y][z]
+					T += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
 
 		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		return T
+
 
 	def DDelta(self, x, sigma):
 		"Dirac delta function in a form of Haussian"
 		return 1/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
-	def getibzn(self, k):
-		"Plug for mapping full Brilluen zone k-number to irreducible BZ"
-		return 0
 
 	def dFde(self,k,n):
-		"Pluf for derivative of Fermi distribution"
-		return 1.0
+		# derivative of Fermi distribution
+		sigma = self.sigma
+		x = self.ene[k][n] - self.fermi
+		return 1/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
-	def R(self,ki, ni, kf, nf):
-		"Calculate scattering rate matrix element"
-		ei = self.ene[ki][ni]
-		ef = self.ene[kf][nf]
-		#RR = ( 2 * pi / hbar ) * pow(self.T(ni,ki,nf,kf),2) * DiracDelta(ef - ei)
-		#if (self.test):
-		print("R(",ki,ni,ei," -> ",kf,nf,ef,") = ",pow(self.T(ki,ni,kf,nf),2))
-		#return R
-		return
 
 	def lifetime(self,kf,nf):
 		"Get inverse lifetime for state n, k"
@@ -387,27 +381,34 @@ class Lifetime(object):
 				if (ki == kf and ni == nf): continue
 
 				# 2 get FBZ - IBZ number correspondance
-				iki = self.getibzn(ki)
-				ikf = self.getibzn(kf)
+				iki = self.ibz2fbz[ki]
+				ikf = self.ibz2fbz[kf]
 
 				# 3 find if we in proximity of Ef
-				if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
+				#if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
+				if (self.iocc[iki][ni] == 0.0 or self.iocc[iki][ni] == 1.0) : continue
 
 				# 4 get FBZ - interpolated FBZ numbet correspondence for group velocity
-				#a = self.vel[ki][ni]
-				#b = self.vel[kf][nf]
-				#costheta=np.dot(a,b)/(LA.norm(a)*LA.norm(b))
-				costheta = 0.0
+				a = self.vel[ki][ni]
+				b = self.vel[kf][nf]
+				an = LA.norm(a)
+				bn = LA.norm(b)
+
+				# check for zero group velocity
+				if (not an or not bn): continue
+				costheta = np.dot(a,b)/(an * bn)
 
 				# get eigenstates
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf]
+				
 
 				inv_t_n += pow(self.T(ki,ni,kf,nf),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
 
 			print(inv_t_n)
 			inv_t += nd * (2*pi/hbar) / pow(2*pi,3.0) * inv_t_n
 
+		if inv_t == 0 : return 0
 		return 1.0/inv_t
 
 	def mobility(self):
@@ -430,16 +431,23 @@ class Lifetime(object):
 			for kf in range(kx*ky*kz):
 
 				# 2 get FBZ - IBZ number correspondance
-				ikf = self.getibzn(kf)
+				ikf = self.ibz2fbz[kf]
+				
+				# check for [0,0,0] velocity
+				if(not LA.norm(self.vel[ikf][ikf])): continue
+
 				# 3 find if we in proximity of Ef
-				if (self.occ[ikf][nf] == 0.0 or self.occ[ikf][nf]==2.0): continue
+				if (self.iocc[ikf][nf] == 0.0 or self.iocc[ikf][nf]==1.0): continue
 
 				# projection of group velocity on field direction
 				proj1 = np.dot(self.vel[ikf][ikf],[1,0,0])
 				# projection of group velocity on current direction
 				proj2 = np.dot(self.vel[ikf][ikf],[1,0,0])
 
-				mob += self.lifetime(kf,nf) * self.dFde(kf,nf) * np.dot(proj1,proj2)
+				lt = self.lifetime(kf,nf)
+				print('(',kf,nf,') = ',lt)
+
+				mob += lt * self.dFde(kf,nf) * np.dot(proj1,proj2)
 
 		return -e / ncarr * pow(2*pi/(dkx*dky*dkz),3.0)
 
@@ -454,7 +462,7 @@ def main(nf = 0, kf = 0):
 	ni = 0
 	kf = 1
 	nf = 0
-	print('T(',ki,ni,' -> ',kf,nf,') = ', qwe.T(ki,ni,kf,nf))
+	print('T(',ki,ni,' -> ',kf,nf,') = ', qwe.lifetime(ki,ni,kf,nf))
 
 	return 0
 

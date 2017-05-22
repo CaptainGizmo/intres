@@ -31,6 +31,6 @@ class ibz2fbz:
 
             if 't-inv' in line:
                 # read the mapping indeces
-                i2f.append(line.split()[4])
+                i2f.append(int(line.split()[4])-1)
 
         self.itpi2f = np.array(i2f)
