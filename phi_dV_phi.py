@@ -93,6 +93,10 @@ class Lifetime(object):
 		self.ibz2fbz = i2f.itpi2f
 		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings")
 		print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings")
+		
+		# cached value of scattering probability matrix (squared elements)
+		self.T2 = np.empty([self.inkpt,self.nbands,self.inkpt,self.nbands], dtype='float64' )
+		self.T2.fill(np.NAN)
 
 
 	def wavecoef(self):
@@ -363,8 +367,8 @@ class Lifetime(object):
 		# defect dencity per cubic cm
 		nd = 1.0 / LA.det(self.cell) * 1e24
 
-		# initial value for inverse t
-		inv_t = 0.0
+		# initial value for scattering rate for kf nf
+		R = 0.0
 
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
 		kx = ky = kz = 6
@@ -372,17 +376,18 @@ class Lifetime(object):
 		dky = 2 * pi / self.cell[1][1] / ky
 		dkz = 2 * pi / self.cell[2][2] / kz
 
-		# normalization so integral dkx*dky*dkz*Delta = 1
-		sigma =  pow(2 * pi, 2.5) / (self.cell[0][0] * self.cell[1][1] * self.cell[2][2])
+		# normalization so integral dkx*dky*dkz*DiracDelta = 1
+		sigma =  pow(2 * pi, 2.5) / LA.det(self.cell)
 
-		# loop over all energy levels
+		# loop over all initial energy levels
 		for ni in range(self.nbands):
-			#
-			inv_t_n = 0.0
+			# scatering coefficient for n-th band
+			R_n = 0.0
 			#for ki in range(self.nikpt):
-			# loop over all k-points
+			# loop over all initial k-points
 			for ki in range(kx*ky*kz):
 
+				t0 = time.time()
 				# 1 check for no self-scattering
 				if (ki == kf and ni == nf): continue
 
@@ -400,30 +405,30 @@ class Lifetime(object):
 				an = LA.norm(a)
 				bn = LA.norm(b)
 
-				# check for zero group velocity
+				# 5 check for zero group velocity
 				if (not an or not bn): continue
 				costheta = np.dot(a,b)/(an * bn)
 
-				# get eigenstates
+				# 6 check if we have cached value for calculated T element
+				if np.isnan(self.T2[iki][ni][ikf][nf]) :
+					self.T2[iki][ni][ikf][nf] = self.T2[ikf][nf][iki][ni] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
+
+				T2 = self.T2[iki][ni][ikf][nf]
+				t1 = time.time()
+				print( '\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', T2,  int(t1-t0),'s' )
+
+				# 7 get eigenstates
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf]
-				
-				# check if we have cached value for calculated T element
-				# if exist: 
-				#  take
-				# else: 
-				#  calculate
-				#  save
-				t0 = time.time()
-				T = self.T(iki,ni,ikf,nf)
-				t1 = time.time()
-				print( '\tT(', ki, ni, '=>', kf, nf, ') = ', T,  int(t1-t0),'s' )
 
-				inv_t_n += pow(abs(T),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
-			inv_t += nd * (2*pi/hbar) / pow(2*pi,3.0) * inv_t_n
+				# 8 sum integral over k-points
+				R_n += T2 * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
+
+			# sum over bands
+			R += nd * (2*pi/hbar) / pow(2*pi,3.0) * R_n
 
 		tau = 0
-		if inv_t != 0 : tau = 1.0/inv_t
+		if R != 0 : tau = 1.0/R
 
 		print( 'T(k=', kf, 'n=', nf, ') = ', tau, ')' )
 		return tau
@@ -440,7 +445,7 @@ class Lifetime(object):
 		ncarr = self.nelect / LA.det(self.cell) * 1e24
 
 		# electron charge, since we work in eV units
-		e = 1.0
+		e = -1.0
 
 		mob = 0.0
 		for nf in range(self.nbands):
