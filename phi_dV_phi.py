@@ -32,19 +32,23 @@ class Lifetime(object):
 			self.nband = nband
 
 
-	def __init__(self, test=False):
-		self.test = test
+	def __init__(self, debug=False):
+		self.debug = debug
 
 		#reading wavefunction
 		#self.wf = 
+		if (self.debug): print('Reading wave-function coefficients from WAVECAR.')
 		self.wavecoef()
-		if (self.test): print('Creating Lifetime ', end='', flush=True)
 
+		if (self.debug): print('Reading charge perturbation from CHGCAR difference.')
 		self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
-		if (self.test): print('CHGCAR readed, ', end='', flush=True)
+
 
 		#size of the grid in CHGCAR
 		self.charge = self.CHGCAR.chg[0]
+
+		# real space calculation reduction, calculate only every scale-th point
+		self.scale = 4
 
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype='int_')
@@ -53,6 +57,7 @@ class Lifetime(object):
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
 
+		if (self.debug): print('Reading simulation configuration and group velocities from vasprun.xml')
 		calc = VaspKpointsInterpolated("vasprun.xml")
 
 		self.cell = calc.basis
@@ -70,6 +75,7 @@ class Lifetime(object):
 		self.nbands = calc.inbands
 		self.sigma = calc.sigma
 		self.fermi = calc.efermi_interpolated
+		self.nelect = calc.nelect
 
 		# parameters for K-points in full BZ
 		# interpolated, but with scaling factor 1
@@ -128,7 +134,7 @@ class Lifetime(object):
 		nband = int(nband_)
 		ecut = float(ecut_)
 
-		if (self.test):
+		if (self.debug):
 			print('Nuber of K-points',nkpt)
 			print('Number of energy bands',nband)
 			print('Energy cut-off',ecut)
@@ -152,7 +158,7 @@ class Lifetime(object):
 		b2mag = norm(b2)
 		b3mag = norm(b3)
 
-		if (self.test):
+		if (self.debug):
 			print('Volume unit cell =',Vcell)
 			print('Reciprocal lattice vectors:')
 			print(b1)
@@ -196,7 +202,7 @@ class Lifetime(object):
 		nb3max=max(nb3maxA,nb3maxB,nb3maxC)
 		npmax=min(npmaxA,npmaxB,npmaxC)
 
-		if (self.test):
+		if (self.debug):
 			print('max. no. G values; 1,2,3 =',nb1max,nb2max,nb3max)
 			print('estimated max. no. plane waves =',npmax)
 
@@ -206,7 +212,7 @@ class Lifetime(object):
 
 		# Begin loops over spin, k-points and bands
 		for spin in range(nspin):
-			if (self.test):
+			if (self.debug):
 				print()
 				print('********')
 				print('reading spin ',spin)
@@ -222,7 +228,7 @@ class Lifetime(object):
 					self.wf.cener[spin][ik][i] = dummy[5+2*i] + 1j * dummy[5+2*i+1]
 					self.wf.occ[spin][ik][i] = dummy[5+2*nband+i]
 
-				if (self.test):
+				if (self.debug):
 					print('k point #',ik,'  input no. of plane waves =', self.wf.nplane[spin][ik], 'k value =',self.wf.kpt[spin][ik])
 
 				# Calculate available plane waves
@@ -320,7 +326,7 @@ class Lifetime(object):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
-		s = 1 #scale of the charge array
+		s = self.scale #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
 		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
@@ -354,8 +360,8 @@ class Lifetime(object):
 
 	def lifetime(self,kf,nf):
 		"Get inverse lifetime for state n, k"
-		# defect dencity
-		nd = 1.0
+		# defect dencity per cubic cm
+		nd = 1.0 / LA.det(self.cell) * 1e24
 
 		# initial value for inverse t
 		inv_t = 0.0
@@ -401,14 +407,25 @@ class Lifetime(object):
 				# get eigenstates
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf]
+				
+				# check if we have cached value for calculated T element
+				# if exist: 
+				#  take
+				# else: 
+				#  calculate
+				#  save
+				t0 = time.time()
+				T = self.T(iki,ni,ikf,nf)
+				t1 = time.time()
+				print( '\tT(', ki, ni, '=>', kf, nf, ') = ', T,  int(t1-t0),'s' )
 
-				inv_t_n += pow(abs(self.T(iki,ni,ikf,nf)),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
+				inv_t_n += pow(abs(T),2.0) * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
 			inv_t += nd * (2*pi/hbar) / pow(2*pi,3.0) * inv_t_n
 
 		tau = 0
 		if inv_t != 0 : tau = 1.0/inv_t
 
-		print('t(',kf,nf,') = ',tau,'(1/',inv_t,')')
+		print( 'T(k=', kf, 'n=', nf, ') = ', tau, ')' )
 		return tau
 
 	def mobility(self):
@@ -419,10 +436,10 @@ class Lifetime(object):
 		dky = 2 * pi / self.cell[1][1] / ky
 		dkz = 2 * pi / self.cell[2][2] / kz
 
-		# carrier concentration
-		ncarr = 1.0
+		# carrier concentration per cubic cm
+		ncarr = self.nelect / LA.det(self.cell) * 1e24
 
-		# electron charge
+		# electron charge, since we work in eV units
 		e = 1.0
 
 		mob = 0.0
@@ -449,15 +466,20 @@ class Lifetime(object):
 		return -e / ncarr * pow(2*pi/(dkx*dky*dkz),3.0)
 
 def main(nf = 0, kf = 0):
-
-	print(pi, e)
+	t0 = time.time()
 	debug = True
-	qwe = Lifetime(debug)
-
-	print(qwe.mobility())
+	lt = Lifetime(debug)
+	t1 = time.time()
+	
+	if lt.debug: print("Data readed in",int(t1-t0),'s.')
+	
+	print("Real space reduction ",lt.scale,'- fold')
+	print(lt.mobility())
+	
+	t2 = time.time()
+	if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0))
 
 	return 0
-
 
 
 if __name__ == "__main__": main()
