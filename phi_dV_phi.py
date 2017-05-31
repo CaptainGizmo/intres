@@ -46,13 +46,14 @@ class Lifetime(object):
 
 		#size of the grid in CHGCAR
 		self.charge = self.CHGCAR.chg[0]
-
-		# real space calculation reduction, calculate only every scale-th point
-		self.scale = 4
-
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype='int_')
-		self.dr = np.array(1.0/self.r)
+
+
+		# real space calculation reduction, calculate only every scale-th point
+		self.scale = 8
+
+
 
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
@@ -64,6 +65,8 @@ class Lifetime(object):
 		print("Cell vectors:")
 		print(self.cell)
 
+
+
 		# parameters for K-points in IBZ
 		# interpolated, but with scaling factor 1
 		self.inkpt = calc.inkpts
@@ -71,6 +74,7 @@ class Lifetime(object):
 		self.iene = calc.ienergies
 		self.ivel = calc.ivelocities
 		self.iocc = calc.ipopulations
+		self.kgrid = calc.kptgrid_divisions
 
 		self.nbands = calc.inbands
 		self.sigma = calc.sigma
@@ -93,6 +97,17 @@ class Lifetime(object):
 		self.ibz2fbz = i2f.itpi2f
 		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings")
 		print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings")
+
+		# for cubic cell
+		self.dr = np.array([0,0,0],dtype='float64')
+		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] # in Ang
+		print('dr',self.dr)
+
+		# step of K-mesh in reciprocal space
+		self.dk = np.array([0,0,0],dtype='float')
+		for i in range(3): self.dk[i] = 2.0 * pi  / self.kgrid[i]  # unitless
+		print('dk',self.dk)
+
 		
 		# cached value of scattering probability matrix (squared elements)
 		self.T2 = np.empty([self.inkpt,self.nbands,self.inkpt,self.nbands], dtype='float64' )
@@ -278,7 +293,7 @@ class Lifetime(object):
 		f.close()
 		return
 
-
+	"""
 	def div(self):
 		"Calculate the divergence of the charge dencity"
 		div = np.empty(self.r,dtype='float64')
@@ -311,8 +326,10 @@ class Lifetime(object):
 								 + (self.charge[x][ym1][z]-2.0*self.charge[x][y][z]+self.charge[x][yp1][z])/pow(dr[1],2) \
 								 + (self.charge[x][y][zm1]-2.0*self.charge[x][y][z]+self.charge[x][y][zp1])/pow(dr[2],2)
 		return div
+	"""
 
-
+	"""
+	# function to check pyx realisation consistency
 	def psi_skn(self, rs, spin, k, n, phi):
 			"Return wavefunction value for n-th energy level, k-point and {x,y,z} point in real space"
 			for x in range(rs[0]):
@@ -324,12 +341,14 @@ class Lifetime(object):
 							csum += self.wf.coeff[spin][k][n][iplane] * np.exp( 2j * pi * (self.wf.kpt[spin][k] + self.wf.igall[spin][k][iplane]).dot(r) )
 						phi[x][y][z] = csum / sqrt(self.wf.Vcell)
 			return
-
+	"""
 
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
+		#Ti = 0.0
+		#Tf = 0.0
 		s = self.scale #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
@@ -345,14 +364,22 @@ class Lifetime(object):
 			for y in range(int(rs[1])):
 				for z in range(int(rs[2])):
 					T += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
+					#Ti += np.conj( phi_i[x][y][z] ) * phi_i[x][y][z]
+					#Tf += np.conj( phi_f[x][y][z] ) * phi_f[x][y][z]
 
-		T *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
+		#Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+		#Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+		#V = self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) * rs[0] * rs[1] * rs[2]
+		#print('<',kf,nf,'|V|',ki,ni,'> = ',abs(T),Ti,Tf)
 		return T
 
 
-	def DDelta(self, x, sigma):
+	def DDelta(self, x):
 		"Dirac delta function in a form of Haussian"
-		return 1/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
+		# normalization for (2pi)^3 volume
+		sigma =  pow(2.0 * pi, 2.5)
+		return 1/(pow(2.0 * pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
 
 	def dFde(self,k,n):
@@ -362,30 +389,27 @@ class Lifetime(object):
 		return -1.0/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
 
-	def lifetime(self,kf,nf):
+	def R(self,kf,nf):
 		"Get inverse lifetime for state n, k"
-		# defect dencity per cubic cm
-		nd = 1.0 / LA.det(self.cell) * 1e24
+		# defect dencity per cubic Angstr
+		nd = 1.0 # per atom, actuall will be 1e-20 or so
+
+		hbar = 4.135667662e-15 # eV*s
 
 		# initial value for scattering rate for kf nf
 		R = 0.0
-
-		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
-		kx = ky = kz = 6
-		dkx = 2 * pi / self.cell[0][0] / kx
-		dky = 2 * pi / self.cell[1][1] / ky
-		dkz = 2 * pi / self.cell[2][2] / kz
-
-		# normalization so integral dkx*dky*dkz*DiracDelta = 1
-		sigma =  pow(2 * pi, 2.5) / LA.det(self.cell)
+		dk = self.dk # unitless 0..2pi
 
 		# loop over all initial energy levels
 		for ni in range(self.nbands):
-			# scatering coefficient for n-th band
+
+			# scatering coefficient for n-th k-point
 			R_n = 0.0
-			#for ki in range(self.nikpt):
+			#Tsum = 0.0
+
 			# loop over all initial k-points
-			for ki in range(kx*ky*kz):
+			# for ki in range(self.kgrid[0] * self.kgrid[1] * self.kgrid[2]):
+			for ki in range(self.nkpt):
 
 				t0 = time.time()
 				# 1 check for no self-scattering
@@ -415,60 +439,67 @@ class Lifetime(object):
 
 				T2 = self.T2[iki][ni][ikf][nf]
 				t1 = time.time()
-				print( '\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', T2,  int(t1-t0),'s' )
 
 				# 7 get eigenstates
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf]
+				print( '\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(T2)*1000.0,'meV, R =', 2.0*pi/hbar*T2*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s' )
 
-				# 8 sum integral over k-points
-				R_n += T2 * (1.0 - costheta) * self.DDelta(ef - ei, sigma) * (dkx * dky * dkz)
+				# 8 sum integral over bands
+				R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+				#T_sum += sqrt(T2)
 
-			# sum over bands
-			R += nd * (2*pi/hbar) / pow(2*pi,3.0) * R_n
+			# print("\tTsum(",ki,')=', T_sum)
+			# sum over K-points
+			R += R_n
+		R = nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # m-3 / eVs * (eV)^2 = eV/m3s
+		# V = dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0) * self.nkpt
+		print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s')
 
-		tau = 0
-		if R != 0 : tau = 1.0/R
-
-		print( 'T(k=', kf, 'n=', nf, ') = ', tau, ')' )
-		return tau
+		return R
 
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
-		kx = ky = kz = 6
-		dkx = 2 * pi / self.cell[0][0] / kx
-		dky = 2 * pi / self.cell[1][1] / ky
-		dkz = 2 * pi / self.cell[2][2] / kz
+		dk = self.dk # unitless, 0..2pi
 
-		# carrier concentration per cubic cm
-		ncarr = self.nelect / LA.det(self.cell) * 1e24
+		# carrier concentration per cubic cm, +3 electrons of defected Al atom
+		# per cubic cm
+		# ncarr = (self.nelect + 3 ) / LA.det(self.cell * 1e-10)
+		# ncarr = 18.1e22 # el per cubic cm
+		ncarr = 3 # per atom
 
 		# electron charge, since we work in eV units
-		e = -1.0
+		#e = -1.6e-19 # coulomb
+		e = 1.0 # in electrons
 
 		mob = 0.0
 		for nf in range(self.nbands):
 			# loop over all k-points
-			for kf in range(kx*ky*kz):
+			for kf in range(self.nkpt):
 
 				# 2 get FBZ - IBZ number correspondance
 				ikf = self.ibz2fbz[kf]
 				
 				# check for [0,0,0] velocity
-				if(not LA.norm(self.vel[ikf][ikf])): continue
+				if(not LA.norm(self.vel[ikf][nf])): continue
 
 				# 3 find if we in proximity of Ef
 				if (self.iocc[ikf][nf] == 0.0 or self.iocc[ikf][nf]==1.0): continue
-
+				
+				# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 				# projection of group velocity on field direction
-				proj1 = np.dot(self.vel[ikf][ikf],[1,0,0])
+				proj1 = np.dot(self.vel[ikf][nf],[1,0,0]) * 1e5
 				# projection of group velocity on current direction
-				proj2 = np.dot(self.vel[ikf][ikf],[1,0,0])
+				proj2 = np.dot(self.vel[ikf][nf],[1,0,0]) * 1e5
+				
+				R_nk = self.R(kf,nf)
+				if not R_nk: tau = 0.0
+				else: tau = 1.0 / R_nk
 
-				mob += self.lifetime(kf,nf) * self.dFde(kf,nf) * np.dot(proj1,proj2)
+				mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
-		return -e / ncarr * pow(2*pi/(dkx*dky*dkz),3.0)
+		return (-2.0 * e / ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # e  * (m2/eVs) =  m2/Vs
 
 def main(nf = 0, kf = 0):
 	t0 = time.time()
@@ -477,11 +508,10 @@ def main(nf = 0, kf = 0):
 	t1 = time.time()
 	
 	if lt.debug: print("Data readed in",int(t1-t0),'s.')
-	
-	print("Real space reduction ",lt.scale,'- fold')
-	print(lt.mobility())
+	print("Mobility:",lt.mobility()*1e-4,' cm2/Vs')
 	
 	t2 = time.time()
+	print("Real space reduction ",lt.scale,'- fold')
 	if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0))
 
 	return 0
