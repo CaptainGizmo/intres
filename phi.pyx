@@ -1,7 +1,12 @@
+#!/usr/bin/env python3
 # cython: cdivision=True
 cimport cython
-cimport openmp
-from cython.parallel cimport *
+from mpi4py import MPI
+#from mpi4py cimport MPI
+#from mpi4py cimport mpi_c
+
+#cimport openmp
+#from cython.parallel cimport *
 from libc.math cimport M_PI
 #from libc.math cimport exp
 #import ctypes
@@ -30,7 +35,13 @@ cdef complex phi(double* kpt, long * igall, long nplane, complex * coeff, double
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, np.ndarray[long, ndim = 2]  np_igall, long nplane, np.ndarray[complex, ndim = 1]  np_coeff, double Vcell, np.ndarray[long, ndim = 1]  np_rs, complex [:,:,:] phi_out):
+cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
+				np.ndarray[long, ndim = 2]  np_igall, \
+				long nplane, \
+				np.ndarray[complex, ndim = 1]  np_coeff, \
+				double Vcell, \
+				np.ndarray[long, ndim = 1]  np_rs, \
+				complex [:,:,:] phi_out):
 
 	#reshape continious-memory array
 	cdef np.ndarray[long, ndim=2, mode = 'c']    np_buff  = np.ascontiguousarray(np_igall, dtype = long)
@@ -48,11 +59,26 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, np.ndarray[long, ndim = 2]  n
 		long YMAX = np_rs[1]
 		long ZMAX = np_rs[2]
 		
-		#np.ndarray[complex,ndim=3] phi_out = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
+		np.ndarray[complex,ndim=3] rank_out = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
+	
+	comm = MPI.COMM_WORLD
 
-	with nogil:
-		for idx in prange(XMAX*YMAX*ZMAX,schedule = 'dynamic'):
-			#for idx in  range(XMAX*YMAX*ZMAX):
+	# Distribute workload so that each MPI process analyzes image number i, where
+	#  i % comm.size == comm.rank
+	#
+	# For example if comm.size == 4:
+	#   rank 0: 0, 4, 8, ...
+	#   rank 1: 1, 5, 9, ...
+	#   rank 2: 2, 6, 10, ...
+	#   rank 3: 3, 7, 11, ...
+	
+	comm.Barrier()
+	#t_start = MPI.Wtime()
+	
+	#print("Number of cores:",comm.size)
+	#print("Rank:",comm.rank)
+	
+	for idx in range(comm.rank, XMAX*YMAX*ZMAX, comm.size):
 			# convert common index to dimention indexes
 			z = idx / (XMAX * YMAX)
 			y = (idx - z * XMAX * YMAX) / XMAX
@@ -62,7 +88,19 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, np.ndarray[long, ndim = 2]  n
 			r[0] = x/(XMAX*1.0)
 			r[1] = y/(YMAX*1.0)
 			r[2] = z/(ZMAX*1.0)
-
-			phi_out[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
+			
+			#write only our values, all other's are still 0
+			rank_out[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
+	
+	# Now reduce the matrix into *phi_out* by summing all *out* arrays
+	# them all together. The result is only avalable at rank 0.
+	# If you want the result to be availabe on all processes, use
+	# Allreduce(...)
+	
+	#spec = np.zeros_like(rank_out)
+	comm.Allreduce([rank_out, MPI.COMPLEX], [phi_out, MPI.COMPLEX], op=MPI.SUM)
+	
+	comm.Barrier()
+	#t_diff = MPI.Wtime()-t_start
 
 	return

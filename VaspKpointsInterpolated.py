@@ -11,11 +11,9 @@ __url__       = ""
 __copyright__ = "(c) 2014 Paul Erhart"
 __license__   = "GPL"
 
-
+from mpi4py import MPI
 
 class VaspKpointsInterpolatedError(Exception): pass
-
-
 
 # Import numpy. Error if fails
 try:
@@ -56,7 +54,7 @@ class VaspKpointsInterpolated:
     
     def __init__(self, filename='vasprun.xml', tolerance=1e-5):
         self.data = d = {}
-
+        self.comm = MPI.COMM_WORLD
         self.basis = None
         self.rec_basis = None
         
@@ -85,6 +83,8 @@ class VaspKpointsInterpolated:
         self.efermi_interpolated = None
         self.sigma = None
         self.read_data(filename)
+
+
 
     def __repr__(self):
         return 'I am Munx. Who are you?'
@@ -116,7 +116,7 @@ class VaspKpointsInterpolated:
 
 
         # 1) extract information regarding k-point grid
-        print("parsing k-point grid information")
+        if self.comm.rank == 0: print("parsing k-point grid information")
         self.dk = []
         for block in xmldoc.findall("kpoints/generation"):
             if not 'param' in block.attrib:
@@ -133,30 +133,31 @@ class VaspKpointsInterpolated:
                         dk.append(float(v))
                     self.dk.append(dk)
         self.dk = np.array(self.dk)
-        print ("k-point grid: ",self.kptgrid_type)
-        print ("k-point step: ",self.kptgrid_divisions)
-        print
+        if self.comm.rank == 0: 
+            print ("k-point grid: ",self.kptgrid_type)
+            print ("k-point step: ",self.kptgrid_divisions)
+            print
 
 
         # 2) extract value of KINTER
-        print("extracting value of KINTER")
+        if self.comm.rank == 0: print("extracting value of KINTER")
         for element in xmldoc.findall("incar/i"):
             if not 'name' in element.attrib:
                 continue
             if element.attrib['name'] == 'KINTER':
                 self.kinter = int(element.text)
                 break
-        print ("KINTER = ",self.kinter)
+        if self.comm.rank == 0: print ("KINTER = ",self.kinter)
 
 
         # 3) extract some parameters
-        print("extracting some parameters")
+        if self.comm.rank == 0: print("extracting some parameters")
         for element in xmldoc.findall("parameters/*/i"):
             if not 'name' in element.attrib:
                 continue
             if element.attrib['name'] == 'NELECT':
                 self.nelect = float(element.text)
-        print("NELECT = ",self.nelect)
+        if self.comm.rank == 0: print("NELECT = ",self.nelect)
 
         for element in xmldoc.findall("parameters/*/*/i"):
             if not 'name' in element.attrib:
@@ -165,10 +166,10 @@ class VaspKpointsInterpolated:
                 self.ispin = int(element.text)
             if element.attrib['name'] == 'SIGMA':
                 self.sigma = float(element.text)
-        print("ISPIN = ",self.ispin)
+        if self.comm.rank == 0: print("ISPIN = ",self.ispin)
 
         # 3) extract some parameters
-        print("extracting cell vectors")
+        if self.comm.rank == 0: print("extracting cell vectors")
         self.basis = []
         self.rec_basis = []
         block = None
@@ -191,7 +192,7 @@ class VaspKpointsInterpolated:
         # ======================================================================================
 
         # 4) locate eigenvalues block with interpolated data
-        print("locating interpolated data for IBZ")
+        if self.comm.rank == 0: print("locating interpolated data for IBZ")
         block = None
         for block in xmldoc.findall("calculation/eigenvalues/velocities"):
             if 'comment' in block.attrib:
@@ -203,7 +204,7 @@ class VaspKpointsInterpolated:
 
 
         # 5) extract information regarding k-point grid
-        print("parsing k-point grid information for IBZ")
+        if self.comm.rank == 0: print("parsing k-point grid information for IBZ")
         self.ikpts = []
         for element in block.findall('kpoints_ibz/varray'):
             if not 'name' in element.attrib:
@@ -216,7 +217,7 @@ class VaspKpointsInterpolated:
 
 
         # 6) extract eigen energies and group velocities
-        print("parsing eigen energies and group velocities for IBZ")
+        if self.comm.rank == 0: print("parsing eigen energies and group velocities for IBZ")
         self.ienergies = []
         self.ivelocities = []
         for element in block.findall('eigenvalues/array/*/*/set'):
@@ -230,7 +231,7 @@ class VaspKpointsInterpolated:
                 self.ivelocities.append(vel)
 
         # 7) extract populations
-        print("parsing populations")
+        if self.comm.rank == 0: print("parsing populations")
 
         block = None
         for block in xmldoc.findall("calculation/eigenvalues"):
@@ -251,7 +252,7 @@ class VaspKpointsInterpolated:
         # ============================================================
 
         # 4) locate eigenvalues block with interpolated data
-        print("locating interpolated data for the full BZ")
+        if self.comm.rank == 0: print("locating interpolated data for the full BZ")
 
         for block in xmldoc.findall("calculation/eigenvalues/electronvelocities"):
             if 'comment' in block.attrib:
@@ -263,7 +264,7 @@ class VaspKpointsInterpolated:
 
 
         # 5) extract information regarding k-point grid
-        print("parsing k-point grid information")
+        if self.comm.rank == 0: print("parsing k-point grid information")
         self.kpts = []
         for element in block.findall('kpoints/varray'):
             if not 'name' in element.attrib:
@@ -276,7 +277,7 @@ class VaspKpointsInterpolated:
 
 
         # 6) extract eigen energies and group velocities
-        print("parsing eigen energies and group velocities")
+        if self.comm.rank == 0: print("parsing eigen energies and group velocities")
         self.energies = []
         self.velocities = []
         for element in block.findall('eigenvalues/array/*/*/set'):
@@ -297,7 +298,7 @@ class VaspKpointsInterpolated:
 
 
         # 8) extract Fermi energy
-        print("extracting interpolated Fermi energy")
+        if self.comm.rank == 0: print("extracting interpolated Fermi energy")
         block = None
         for block in xmldoc.findall("calculation/dos"):
             if 'comment' in block.attrib:
@@ -312,7 +313,7 @@ class VaspKpointsInterpolated:
             if element.attrib['name'] == 'efermi':
                 self.efermi_interpolated = float(element.text)
                 break
-        print("Fermi energy from interpolated data: ",self.efermi_interpolated)
+        if self.comm.rank == 0: print("Fermi energy from interpolated data: ",self.efermi_interpolated)
 
         return True
 

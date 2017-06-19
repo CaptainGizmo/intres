@@ -4,8 +4,8 @@ from distutils.extension import Extension
 from Cython.Build import cythonize
 from Cython.Distutils import build_ext
 import os
-os.environ["CC"] = "icc"
-os.environ["LDSHARED"] = "icc -shared"
+os.environ["CC"] = "mpicc"
+os.environ["LDSHARED"] = "mpicc -shared"
 
 setup(
   name = "phi",
@@ -15,8 +15,8 @@ setup(
     Extension("phi",
               ["phi.pyx"],
               #extra_compile_args = ["-O3", "-fopenmp","-xMIC-AVX512"],
-              extra_compile_args = ["-O3", "-fopenmp"],
-              extra_link_args=['-fopenmp']
+              extra_compile_args = ["-O3"],
+              #extra_link_args=['-fopenmp']
               )
   ]
 )
