@@ -407,15 +407,15 @@ class Lifetime(object):
 				if abs(ei - ef) > self.sigma*0.1: continue
 
 				# 6 check if we have cached value for calculated T element
-				init = iki*self.inkpt + ni
-				final = ikf*self.inkpt + nf
+				init = iki*self.nbands + ni
+				final = ikf*self.nbands + nf
 				if not self.T2[init,final]:
 					t0 = time.time()
 					self.comm.barrier()
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
 					#if self.comm.rank==0:
-					print('\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(self.T2[iki][ni][ikf][nf])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[iki][ni][ikf][nf]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
+					print('\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
 
 				T2 = self.T2[init,final]
 
@@ -452,17 +452,19 @@ class Lifetime(object):
 				# 2 get FBZ - IBZ number correspondance
 				ikf = self.ibz2fbz[kf]
 				
-				# check for [0,0,0] velocity
-				if(not LA.norm(self.vel[ikf][nf])): continue
 
 				# 3 find if we in proximity of Ef
 				if (self.iocc[ikf][nf] == 0.0 or self.iocc[ikf][nf]==1.0): continue
-				
+
+				vel = self.vel[ikf][nf]
+				# check for [0,0,0] velocity
+				if(not LA.norm(vel): continue
+
 				# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 				# projection of group velocity on field direction
-				proj1 = np.dot(self.vel[ikf][nf],[1,0,0]) * 1e5
+				proj1 = np.dot(vel,[1,0,0]) * 1e5
 				# projection of group velocity on current direction
-				proj2 = np.dot(self.vel[ikf][nf],[1,0,0]) * 1e5
+				proj2 = np.dot(vel,[1,0,0]) * 1e5
 				
 				R_nk = self.R(kf,nf)
 				if not R_nk: tau = 0.0
