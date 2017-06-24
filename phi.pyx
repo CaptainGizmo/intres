@@ -72,12 +72,6 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 	#   rank 2: 2, 6, 10, ...
 	#   rank 3: 3, 7, 11, ...
 	
-	comm.Barrier()
-	#t_start = MPI.Wtime()
-	
-	#print("Number of cores:",comm.size)
-	#print("Rank:",comm.rank)
-	
 	for idx in range(comm.rank, XMAX*YMAX*ZMAX, comm.size):
 			# convert common index to dimention indexes
 			z = idx / (XMAX * YMAX)
@@ -98,9 +92,8 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 	# Allreduce(...)
 	
 	#spec = np.zeros_like(rank_out)
-	comm.Allreduce([rank_out, MPI.COMPLEX], [phi_out, MPI.COMPLEX], op=MPI.SUM)
-	
-	comm.Barrier()
-	#t_diff = MPI.Wtime()-t_start
+	#comm.Reduce(rank_out, phi_out, op=MPI.SUM, root = 0)
+	comm.Allreduce([rank_out, MPI.C_DOUBLE_COMPLEX], [phi_out, MPI.C_DOUBLE_COMPLEX], op=MPI.SUM)
+	#comm.Allreduce([rank_out, MPI.COMPLEX], [phi_out, MPI.COMPLEX], op=MPI.SUM)
 
 	return

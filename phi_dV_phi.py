@@ -13,6 +13,8 @@ from scipy import sparse as sps
 from sympy import DiracDelta
 from math import sin,cos,asin,acos,sqrt
 
+#import mpi4py
+#mpi4py.rc.recv_mprobe = False
 from mpi4py import MPI
 
 import phi
@@ -41,16 +43,20 @@ class Lifetime(object):
 		#reading wavefunction
 		if self.comm.rank == 0:
 			if self.debug : print('Reading wave-function coefficients from WAVECAR.', flush = True)
-		self.wavecoef()
+			self.wavecoef()
+		else:
+			#self.wavecoef()
+			pass
 
 		if self.comm.rank == 0:
 			if self.debug : print('Reading charge perturbation from CHGCAR difference.', flush = True)
-		self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
-			#scatter CHGCAR
+			self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
+			self.charge = self.CHGCAR.chg[0]
+		else:
+			self.charge = None
+		#scatter CHGCAR
+		self.charge = self.comm.bcast(self.charge, root = 0)
 
-
-		#size of the grid in CHGCAR
-		self.charge = self.CHGCAR.chg[0]
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype='int_')
 
@@ -62,16 +68,12 @@ class Lifetime(object):
 
 		if self.comm.rank == 0:
 			if self.debug : print('Reading simulation configuration and group velocities from vasprun.xml', flush = True)
-		calc = VaspKpointsInterpolated("vasprun.xml")
-			# scatter calc
-			
-		self.comm.Barrier()
+			calc = VaspKpointsInterpolated("vasprun.xml")
+		else:
+			calc = None
+		calc = self.comm.bcast(calc, root = 0)
 
 		self.cell = calc.basis
-		if self.comm.rank == 0: print("Cell vectors:")
-		if self.comm.rank == 0: print(self.cell)
-
-
 
 		# parameters for K-points in IBZ
 		# interpolated, but with scaling factor 1
@@ -94,41 +96,53 @@ class Lifetime(object):
 		self.ene = calc.energies
 		self.vel = calc.velocities
 
-		if (self.debug and self.comm.rank == 0):
-			print("Number of k-points in full IBZ interploated:",self.inkpt)
-			print("Number of k-points in full BZ interpolated:",self.nkpt)
+		if self.comm.rank == 0: 
+			if self.debug:
+				print("Cell vectors:")
+				print(self.cell)
+				print("Number of k-points in full IBZ interploated:",self.inkpt)
+				print("Number of k-points in full BZ interpolated:",self.nkpt)
 
-		# mapping for k-points from IBZ to FBZ
-		i2f = ibz2fbz("OUTCAR")
+
+		if self.comm.rank == 0:
+			# mapping for k-points from IBZ to FBZ
+			i2f = ibz2fbz("OUTCAR")
+		else:
+			i2f = None
+
+		i2f = self.comm.bcast(i2f, root = 0)
+
 		self.nibz2fbz = i2f.nitpi2f
 		self.ibz2fbz = i2f.itpi2f
-		
-		if (self.debug and self.comm.rank == 0):
-			print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
-			print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
+
+		if self.comm.rank == 0:
+			if self.debug:
+				print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
+				print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
 
 		# for cubic cell
 		self.dr = np.array([0,0,0],dtype='float64')
 		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] # in Ang
-		if (self.debug and self.comm.rank == 0): print('dr',self.dr, flush = True)
+
+		if self.debug:
+			if self.comm.rank == 0:
+				print('dr',self.dr, flush = True)
 
 		# step of K-mesh in reciprocal space
 		self.dk = np.array([0,0,0],dtype='float')
 		for i in range(3): self.dk[i] = 2.0 * pi  / self.kgrid[i]  # unitless
-		if (self.debug and self.comm.rank == 0): print('dk',self.dk, flush = True)
+		if self.debug:
+			if self.comm.rank == 0: print('dk',self.dk, flush = True)
 
-		
-		# cached value of scattering probability matrix (squared elements)
-		self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
-		
-		#self.T2 = sparse.coo_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype='float64')
-		if (self.restart):
-			#T2 = sps.load_npz("data_sparse.npz")
-			pass
-
-	def read_restart(self):
-		# fill T2 array
-		return
+		if self.comm.rank == 0:
+			# cached value of scattering probability matrix (squared elements)
+			self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
+			#if (self.restart):
+			#	data = sps.load_npz("./data_sparse.npz")
+			#	self.T2 = data.todok()
+		else:
+			self.T2 = None
+		self.T2 = self.comm.bcast(self.T2, root = 0)
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
@@ -169,7 +183,8 @@ class Lifetime(object):
 		nband = int(nband_)
 		ecut = float(ecut_)
 
-		if (self.debug and self.comm.rank==0):
+		if self.debug:
+			#if self.comm.rank==0:
 			print('Nuber of K-points',nkpt)
 			print('Number of energy bands',nband)
 			print('Energy cut-off',ecut)
@@ -193,7 +208,8 @@ class Lifetime(object):
 		b2mag = norm(b2)
 		b3mag = norm(b3)
 
-		if (self.debug and self.comm.rank==0):
+		if self.debug:
+			#if self.comm.rank==0:
 			print('Volume unit cell =',Vcell)
 			print('Reciprocal lattice vectors:')
 			print(b1)
@@ -237,7 +253,8 @@ class Lifetime(object):
 		nb3max=max(nb3maxA,nb3maxB,nb3maxC)
 		npmax=min(npmaxA,npmaxB,npmaxC)
 
-		if (self.debug and self.comm.rank==0):
+		if self.debug:
+			#if self.comm.rank==0 :
 			print('max. no. G values; 1,2,3 =',nb1max,nb2max,nb3max)
 			print('estimated max. no. plane waves =',npmax, flush = True)
 
@@ -247,7 +264,8 @@ class Lifetime(object):
 
 		# Begin loops over spin, k-points and bands
 		for spin in range(nspin):
-			if (self.debug and self.comm.rank==0):
+			if self.debug :
+				#if self.comm.rank==0 :
 				print()
 				print('********')
 				print('reading spin ',spin)
@@ -263,7 +281,8 @@ class Lifetime(object):
 					self.wf.cener[spin][ik][i] = dummy[5+2*i] + 1j * dummy[5+2*i+1]
 					self.wf.occ[spin][ik][i] = dummy[5+2*nband+i]
 
-				if (self.debug and self.comm.rank==0):
+				if self.debug:
+					# and self.comm.rank==0):
 					print('k point #',ik,'  input no. of plane waves =', self.wf.nplane[spin][ik], 'k value =',self.wf.kpt[spin][ik])
 
 				# Calculate available plane waves
@@ -318,24 +337,74 @@ class Lifetime(object):
 		s = self.scale #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
-		phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
-		phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
+		#phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
+		#phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
+		
+		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
+		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
 
 		spin = 0 #non spin-polarized
-		phi.phi_skn(self.wf.kpt[spin][ki], self.wf.igall[spin][ki], self.wf.nplane[spin][ki], self.wf.coeff[spin][ki][ni], self.wf.Vcell, rs, phi_i)
-		phi.phi_skn(self.wf.kpt[spin][kf], self.wf.igall[spin][kf], self.wf.nplane[spin][kf], self.wf.coeff[spin][kf][nf], self.wf.Vcell, rs, phi_f)
+		if self.comm.rank == 0:
+			kpt = self.wf.kpt[spin][ki]
+			igall = self.wf.igall[spin][ki]
+			nplane = self.wf.nplane[spin][ki]
+			coeff = self.wf.coeff[spin][ki][ni]
+			Vcell = self.wf.Vcell
+		else:
+			kpt = None
+			igall = None
+			nplane = None
+			coeff = None
+			Vcell = None
+
+		kpt = self.comm.bcast(kpt, root = 0)
+		igall = self.comm.bcast(igall, root = 0)
+		nplane = self.comm.bcast(nplane, root = 0)
+		coeff = self.comm.bcast(coeff, root = 0)
+		Vcell = self.comm.bcast(Vcell, root = 0)
+
+		#self.comm.Barrier()
+		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_i)
+		#self.comm.Barrier()
+
+		if self.comm.rank == 0:
+			kpt = self.wf.kpt[spin][kf]
+			igall = self.wf.igall[spin][kf]
+			nplane = self.wf.nplane[spin][kf]
+			coeff = self.wf.coeff[spin][kf][nf]
+			Vcell = self.wf.Vcell
+		else:
+			kpt = None
+			igall = None
+			nplane = None
+			coeff = None
+			Vcell = None
+
+		kpt = self.comm.bcast(kpt, root = 0)
+		igall = self.comm.bcast(igall, root = 0)
+		nplane = self.comm.bcast(nplane, root = 0)
+		coeff = self.comm.bcast(coeff, root = 0)
+		Vcell = self.comm.bcast(Vcell, root = 0)
+
+		#self.comm.Barrier()
+		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
+		#self.comm.Barrier()
 
 		# x y z - indeces of points in the charge array
-		for x in range(int(rs[0])):
-			for y in range(int(rs[1])):
-				for z in range(int(rs[2])):
-					T += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
-					Ti += np.conj( phi_i[x][y][z] ) * phi_i[x][y][z]
-					Tf += np.conj( phi_f[x][y][z] ) * phi_f[x][y][z]
+		if self.comm.rank==0:
+			for x in range(int(rs[0])):
+				for y in range(int(rs[1])):
+					for z in range(int(rs[2])):
+						T += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
+						Ti += np.conj( phi_i[x][y][z] ) * phi_i[x][y][z]
+						Tf += np.conj( phi_f[x][y][z] ) * phi_f[x][y][z]
+		else:
+			T = 1
 
 		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
 		Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+
 		if self.comm.rank==0:
 			print('\t<{},{}|V|{},{}> = {:f} <i|i> = {:f} <f|f> = {:f}'.format(kf,nf,ki,ni,abs(T),abs(Ti),abs(Tf)))
 		return T
@@ -411,21 +480,28 @@ class Lifetime(object):
 				final = ikf*self.nbands + nf
 				if not self.T2[init,final]:
 					t0 = time.time()
-					self.comm.barrier()
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
-					#if self.comm.rank==0:
-					print('\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
+					if self.comm.rank==0:
+						print('\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
 
 				T2 = self.T2[init,final]
 
 				# 8 sum integral over bands
-				R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+				if self.comm.rank == 0:
+					R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
 
 			# sum over K-points
 			R += R_n
-		R = nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # m-3 / eVs * (eV)^2 = eV/m3s
-		if self.comm.rank==0: print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
+		
+		#print("Preaparing to exit R",self.comm.rank,nf,kf)
+		if self.comm.rank == 0:
+			R = nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # m-3 / eVs * (eV)^2 = eV/m3s
+			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
+		else:
+			pass
+		
+		#print("Now try to exit R",self.comm.rank,nf,kf, flush = True)
 
 		return R
 
@@ -443,8 +519,8 @@ class Lifetime(object):
 		# electron charge, since we work in eV units
 		#e = -1.6e-19 # coulomb
 		e = 1.0 # in electrons
-
 		mob = 0.0
+
 		for nf in range(self.nbands):
 			# loop over all k-points
 			for kf in range(self.nkpt):
@@ -458,7 +534,7 @@ class Lifetime(object):
 
 				vel = self.vel[ikf][nf]
 				# check for [0,0,0] velocity
-				if(not LA.norm(vel): continue
+				if(not LA.norm(vel)): continue
 
 				# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 				# projection of group velocity on field direction
@@ -467,14 +543,25 @@ class Lifetime(object):
 				proj2 = np.dot(vel,[1,0,0]) * 1e5
 				
 				R_nk = self.R(kf,nf)
+
+				#print("Just exited R",self.comm.rank,kf,nf,flush=True)
+
 				if not R_nk: tau = 0.0
 				else: tau = 1.0 / R_nk
 
-				mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
+				if self.comm.rank == 0:
+					mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
-		return (-2.0 * e / ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # e  * (m2/eVs) =  m2/Vs
+		#print("Done", self.comm.rank,flush=True)
+		if self.comm.rank == 0:
+			return (-2.0 * e / ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # e  * (m2/eVs) =  m2/Vs
+
+		return 0
 
 def main(nf = 0, kf = 0):
+
+	comm = MPI.COMM_WORLD
+	rank = comm.Get_rank()
 
 	t0 = time.time()
 	debug = True
@@ -488,15 +575,13 @@ def main(nf = 0, kf = 0):
 		if lt.debug: print("Data readed in",int(t1-t0),'s.')
 
 	mob = lt.mobility()
-	
-	lt.comm.Barrier()
+
 	if lt.comm.rank == 0:
 		print("Mobility:",mob*1e-4,' cm2/Vs')
 		t2 = time.time()
 		print("Real space reduction ",lt.scale,'- fold')
-		if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0)," Ncores:",lt.comm.size)
+		if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0)," Ncores:",lt.comm.size, flush = True)
 
-	lt.comm.Disconnect()
 	return 0
 
 if __name__ == "__main__": main()
