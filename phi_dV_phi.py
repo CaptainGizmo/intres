@@ -75,8 +75,7 @@ class Lifetime(object):
 
 		self.cell = calc.basis
 
-		# parameters for K-points in IBZ
-		# interpolated, but with scaling factor 1
+		# parameters for K-points in IBZ (formally interpolated, but with scaling factor 1)
 		self.inkpt = calc.inkpts
 		self.ikpts = calc.ikpts
 		self.iene = calc.ienergies
@@ -89,12 +88,12 @@ class Lifetime(object):
 		self.fermi = calc.efermi_interpolated
 		self.nelect = calc.nelect
 
-		# parameters for K-points in full BZ
-		# interpolated, but with scaling factor 1
+		# parameters for K-points in full BZ (formally interpolated, but with scaling factor 1)
 		self.nkpt = calc.nkpts
 		self.kpts = calc.kpts
 		self.ene = calc.energies
 		self.vel = calc.velocities
+		#print(self.vel.shape)
 
 		if self.comm.rank == 0: 
 			if self.debug:
@@ -137,9 +136,9 @@ class Lifetime(object):
 		if self.comm.rank == 0:
 			# cached value of scattering probability matrix (squared elements)
 			self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
-			#if (self.restart):
-			#	data = sps.load_npz("./data_sparse.npz")
-			#	self.T2 = data.todok()
+			if (self.restart):
+				data = sps.load_npz("./data_sparse.npz")
+				self.T2 = data.todok()
 		else:
 			self.T2 = None
 		self.T2 = self.comm.bcast(self.T2, root = 0)
@@ -458,7 +457,7 @@ class Lifetime(object):
 				#if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
 				if (self.iocc[iki][ni] == 0.0 or self.iocc[iki][ni] == 1.0) : continue
 
-				# 4 get FBZ - interpolated FBZ numbet correspondence for group velocity
+				# 4 get FBZ - interpolated FBZ number correspondence for group velocity
 				a = self.vel[ki][ni]
 				b = self.vel[kf][nf]
 				an = LA.norm(a)
@@ -523,11 +522,10 @@ class Lifetime(object):
 
 		for nf in range(self.nbands):
 			# loop over all k-points
-			for kf in range(self.nkpt):
+			for ikf in range(self.inkpt):
 
 				# 2 get FBZ - IBZ number correspondance
-				ikf = self.ibz2fbz[kf]
-				
+				#ikf = self.ibz2fbz[kf]
 
 				# 3 find if we in proximity of Ef
 				if (self.iocc[ikf][nf] == 0.0 or self.iocc[ikf][nf]==1.0): continue
@@ -536,21 +534,23 @@ class Lifetime(object):
 				# check for [0,0,0] velocity
 				if(not LA.norm(vel)): continue
 
-				# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
-				# projection of group velocity on field direction
-				proj1 = np.dot(vel,[1,0,0]) * 1e5
-				# projection of group velocity on current direction
-				proj2 = np.dot(vel,[1,0,0]) * 1e5
-				
-				R_nk = self.R(kf,nf)
+				R_nk = self.R(ikf,nf)
 
-				#print("Just exited R",self.comm.rank,kf,nf,flush=True)
-
-				if not R_nk: tau = 0.0
+				if not R_nk: continue
 				else: tau = 1.0 / R_nk
 
-				if self.comm.rank == 0:
-					mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
+				# sum over all reflections of reduced K-point
+				for kf in np.where(self.ibz2fbz == ikf)[0]:
+					#print(kf)
+					vel = self.vel[kf][nf]
+					# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
+					# projection of group velocity on field direction
+					proj1 = np.dot(vel,[1,0,0]) * 1e5
+					# projection of group velocity on current direction
+					proj2 = np.dot(vel,[1,0,0]) * 1e5
+
+					if self.comm.rank == 0:
+						mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
 		#print("Done", self.comm.rank,flush=True)
 		if self.comm.rank == 0:
