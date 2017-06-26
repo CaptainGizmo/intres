@@ -331,6 +331,7 @@ class Lifetime(object):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
+		Trank = 0.0
 		Ti = 0.0
 		Tf = 0.0
 		s = self.scale #scale of the charge array
@@ -338,9 +339,11 @@ class Lifetime(object):
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
 		#phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
 		#phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
-		
+
 		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
 		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
+
+		#print("Enter T", self.comm.rank,flush=True)
 
 		spin = 0 #non spin-polarized
 		if self.comm.rank == 0:
@@ -362,9 +365,8 @@ class Lifetime(object):
 		coeff = self.comm.bcast(coeff, root = 0)
 		Vcell = self.comm.bcast(Vcell, root = 0)
 
-		#self.comm.Barrier()
+		#print("Call phi 1", self.comm.rank,flush=True)
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_i)
-		#self.comm.Barrier()
 
 		if self.comm.rank == 0:
 			kpt = self.wf.kpt[spin][kf]
@@ -385,12 +387,22 @@ class Lifetime(object):
 		coeff = self.comm.bcast(coeff, root = 0)
 		Vcell = self.comm.bcast(Vcell, root = 0)
 
-		#self.comm.Barrier()
-		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
-		#self.comm.Barrier()
+		#print("Call phi 2", self.comm.rank,flush=True)
+		#phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
 
+		#print("loop", self.comm.rank,flush=True)
 		# x y z - indeces of points in the charge array
-		if self.comm.rank==0:
+		for idx in range(self.comm.rank, int(rs[0]*rs[1]*rs[2]), self.comm.size):
+			# convert common index to dimention indexes
+			z = int(  idx / (rs[1]*rs[2])           )
+			y = int( (idx - z *rs[1]*rs[2]) / rs[0] )
+			x = int( (idx - z *rs[1]*rs[2]) % rs[0] )
+			Trank += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z] + 0.00001
+
+		T = self.comm.allreduce(Trank,op=MPI.SUM)
+
+		"""
+		if self.comm.rank>0:
 			for x in range(int(rs[0])):
 				for y in range(int(rs[1])):
 					for z in range(int(rs[2])):
@@ -399,11 +411,13 @@ class Lifetime(object):
 						Tf += np.conj( phi_f[x][y][z] ) * phi_f[x][y][z]
 		else:
 			T = 1
-
+		print("end loop", self.comm.rank,flush=True)
+		"""
+		
 		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
 		Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
-
+		
 		if self.comm.rank==0:
 			print('\t<{},{}|V|{},{}> = {:f} <i|i> = {:f} <f|f> = {:f}'.format(kf,nf,ki,ni,abs(T),abs(Ti),abs(Tf)))
 		return T
@@ -440,34 +454,17 @@ class Lifetime(object):
 
 			# scatering coefficient for n-th k-point
 			R_n = 0.0
-			#Tsum = 0.0
 
-			# loop over all initial k-points
-			# for ki in range(self.kgrid[0] * self.kgrid[1] * self.kgrid[2]):
+			# loop over initial k-points in IBZ
 			for iki in range(self.inkpt):
 
-				ikf = kf # we already supply only indeces from IBZ
-				# 1 check for no self-scattering
-				#if (ki == kf and ni == nf): continue
 
-				# 2 get FBZ - IBZ number correspondance
-				#iki = self.ibz2fbz[ki]
-				#ikf = self.ibz2fbz[kf]
+				
+				ikf = kf # we already supply only indeces from IBZ
 
 				# 3 find if we in proximity of Ef
 				#if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
 				if (self.iocc[iki][ni] == 0.0 or self.iocc[iki][ni] == 1.0) : continue
-
-				# 4 get FBZ - interpolated FBZ number correspondence for group velocity
-				#a = self.vel[ki][ni]
-				#b = self.vel[kf][nf]
-				#an = LA.norm(a)
-				#bn = LA.norm(b)
-
-				# 5 check for zero group velocity
-				#if (not an or not bn): continue
-				#costheta = np.dot(a,b)/(an * bn)
-				#if (costheta == 1.0): continue
 
 				# 7 get eigenstates
 				ei = self.ene[iki][ni]
@@ -483,7 +480,9 @@ class Lifetime(object):
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
 					if self.comm.rank==0:
-						print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
+						print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
+					#else:
+					#	print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0, flush=True)
 				T2 = self.T2[init,final]
 
 				# sum over all reflections of reduced K-point
@@ -538,6 +537,7 @@ class Lifetime(object):
 			# loop over all k-points
 			for ikf in range(self.inkpt):
 
+				
 				# 2 get FBZ - IBZ number correspondance
 				#ikf = self.ibz2fbz[kf]
 
@@ -555,7 +555,6 @@ class Lifetime(object):
 
 				# sum over all reflections of reduced K-point
 				for kf in np.where(self.ibz2fbz == ikf)[0]:
-					#print(kf)
 					vel = self.vel[kf][nf]
 					# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 					# projection of group velocity on field direction
@@ -566,7 +565,7 @@ class Lifetime(object):
 					if self.comm.rank == 0:
 						mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
-		#print("Done", self.comm.rank,flush=True)
+		
 		if self.comm.rank == 0:
 			return (-2.0 * e / ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # e  * (m2/eVs) =  m2/Vs
 

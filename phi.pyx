@@ -28,6 +28,7 @@ cdef complex phi(double* kpt, long * igall, long nplane, complex * coeff, double
 	
 	for iplane in range(nplane):
 		# k.dot.r
+		k_r = 0.0
 		for dim in range(3): k_r += (kpt[dim] + igall[3*iplane+dim]) * r[dim]
 		out += coeff[iplane] * cexp( 2j * M_PI * k_r)
 
@@ -71,7 +72,7 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 	#   rank 1: 1, 5, 9, ...
 	#   rank 2: 2, 6, 10, ...
 	#   rank 3: 3, 7, 11, ...
-	
+
 	for idx in range(comm.rank, XMAX*YMAX*ZMAX, comm.size):
 			# convert common index to dimention indexes
 			z = idx / (XMAX * YMAX)
@@ -85,15 +86,14 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 			
 			#write only our values, all other's are still 0
 			rank_out[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
-	
+
 	# Now reduce the matrix into *phi_out* by summing all *out* arrays
 	# them all together. The result is only avalable at rank 0.
 	# If you want the result to be availabe on all processes, use
 	# Allreduce(...)
 	
-	#spec = np.zeros_like(rank_out)
 	#comm.Reduce(rank_out, phi_out, op=MPI.SUM, root = 0)
-	comm.Allreduce([rank_out, MPI.C_DOUBLE_COMPLEX], [phi_out, MPI.C_DOUBLE_COMPLEX], op=MPI.SUM)
-	#comm.Allreduce([rank_out, MPI.COMPLEX], [phi_out, MPI.COMPLEX], op=MPI.SUM)
+	#comm.Allreduce([rank_out, MPI.C_DOUBLE_COMPLEX], [phi_out, MPI.C_DOUBLE_COMPLEX], op=MPI.SUM)
+	comm.Allreduce(rank_out, phi_out, op=MPI.SUM)
 
 	return
