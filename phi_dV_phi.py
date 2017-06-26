@@ -444,33 +444,34 @@ class Lifetime(object):
 
 			# loop over all initial k-points
 			# for ki in range(self.kgrid[0] * self.kgrid[1] * self.kgrid[2]):
-			for ki in range(self.nkpt):
+			for iki in range(self.inkpt):
 
+				ikf = kf # we already supply only indeces from IBZ
 				# 1 check for no self-scattering
-				if (ki == kf and ni == nf): continue
+				#if (ki == kf and ni == nf): continue
 
 				# 2 get FBZ - IBZ number correspondance
-				iki = self.ibz2fbz[ki]
-				ikf = self.ibz2fbz[kf]
+				#iki = self.ibz2fbz[ki]
+				#ikf = self.ibz2fbz[kf]
 
 				# 3 find if we in proximity of Ef
 				#if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
 				if (self.iocc[iki][ni] == 0.0 or self.iocc[iki][ni] == 1.0) : continue
 
 				# 4 get FBZ - interpolated FBZ number correspondence for group velocity
-				a = self.vel[ki][ni]
-				b = self.vel[kf][nf]
-				an = LA.norm(a)
-				bn = LA.norm(b)
+				#a = self.vel[ki][ni]
+				#b = self.vel[kf][nf]
+				#an = LA.norm(a)
+				#bn = LA.norm(b)
 
 				# 5 check for zero group velocity
-				if (not an or not bn): continue
-				costheta = np.dot(a,b)/(an * bn)
-				if (costheta == 1.0): continue
+				#if (not an or not bn): continue
+				#costheta = np.dot(a,b)/(an * bn)
+				#if (costheta == 1.0): continue
 
 				# 7 get eigenstates
 				ei = self.ene[iki][ni]
-				ef = self.ene[ikf][nf]
+				ef = self.ene[ikf][nf] 
 				
 				if abs(ei - ef) > self.sigma*0.1: continue
 
@@ -482,13 +483,26 @@ class Lifetime(object):
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
 					if self.comm.rank==0:
-						print('\tT(', ki,'(',iki,')', ni, '=>', kf,'(',ikf,')', nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
-
+						print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s')
 				T2 = self.T2[init,final]
 
-				# 8 sum integral over bands
-				if self.comm.rank == 0:
-					R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+				# sum over all reflections of reduced K-point
+				for ki in np.where(self.ibz2fbz == iki)[0]:
+
+					# 4 get FBZ - interpolated FBZ number correspondence for group velocity
+					a = self.vel[ki][ni]
+					b = self.vel[kf][nf]
+					an = LA.norm(a)
+					bn = LA.norm(b)
+
+					# 5 check for zero group velocity
+					if (not an or not bn): continue
+					costheta = np.dot(a,b)/(an * bn)
+					if (costheta == 1.0): continue
+
+					# 8 sum integral over bands
+					if self.comm.rank == 0:
+						R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
 
 			# sum over K-points
 			R += R_n
