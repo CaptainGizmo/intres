@@ -337,13 +337,9 @@ class Lifetime(object):
 		s = self.scale #scale of the charge array
 
 		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
-		#phi_i = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
-		#phi_f = np.empty([rs[0],rs[1],rs[2]],dtype='complex128')
 
 		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
 		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
-
-		#print("Enter T", self.comm.rank,flush=True)
 
 		spin = 0 #non spin-polarized
 		if self.comm.rank == 0:
@@ -365,7 +361,6 @@ class Lifetime(object):
 		coeff = self.comm.bcast(coeff, root = 0)
 		Vcell = self.comm.bcast(Vcell, root = 0)
 
-		#print("Call phi 1", self.comm.rank,flush=True)
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_i)
 
 		if self.comm.rank == 0:
@@ -387,39 +382,25 @@ class Lifetime(object):
 		coeff = self.comm.bcast(coeff, root = 0)
 		Vcell = self.comm.bcast(Vcell, root = 0)
 
-		#print("Call phi 2", self.comm.rank,flush=True)
-		#phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
+		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
 
-		#print("loop", self.comm.rank,flush=True)
 		# x y z - indeces of points in the charge array
 		for idx in range(self.comm.rank, int(rs[0]*rs[1]*rs[2]), self.comm.size):
 			# convert common index to dimention indexes
 			z = int(  idx / (rs[1]*rs[2])           )
 			y = int( (idx - z *rs[1]*rs[2]) / rs[0] )
 			x = int( (idx - z *rs[1]*rs[2]) % rs[0] )
-			Trank += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z] + 0.00001
+			Trank += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
 
 		T = self.comm.allreduce(Trank,op=MPI.SUM)
 
-		"""
-		if self.comm.rank>0:
-			for x in range(int(rs[0])):
-				for y in range(int(rs[1])):
-					for z in range(int(rs[2])):
-						T += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
-						Ti += np.conj( phi_i[x][y][z] ) * phi_i[x][y][z]
-						Tf += np.conj( phi_f[x][y][z] ) * phi_f[x][y][z]
-		else:
-			T = 1
-		print("end loop", self.comm.rank,flush=True)
-		"""
-		
 		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
-		Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
-		Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+		#Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
+		#Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		
 		if self.comm.rank==0:
-			print('\t<{},{}|V|{},{}> = {:f} <i|i> = {:f} <f|f> = {:f}'.format(kf,nf,ki,ni,abs(T),abs(Ti),abs(Tf)))
+			#print('\t<{},{}|V|{},{}> = {:f} <i|i> = {:f} <f|f> = {:f}'.format(kf,nf,ki,ni,abs(T),abs(Ti),abs(Tf)))
+			print('\t<{},{}|V|{},{}> = {:e} '.format(kf,nf,ki,ni,abs(T)))
 		return T
 
 
@@ -480,13 +461,16 @@ class Lifetime(object):
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
 					if self.comm.rank==0:
-						print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
-					#else:
-					#	print('\tT(', iki, ni, '=>', ikf, nf, ') = ', sqrt(self.T2[init,final])*1000.0, flush=True)
+						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
+				else:
+					if self.comm.rank==0:
+						print('\tT(', iki, ni, '=>', ikf, nf, ') =',sqrt(self.T2[init,final])*1000.0,'meV REUSE', flush=True)
 				T2 = self.T2[init,final]
 
 				# sum over all reflections of reduced K-point
-				for ki in np.where(self.ibz2fbz == iki)[0]:
+				kpts = np.where(self.ibz2fbz == iki)[0]
+				if self.comm.rank==0: print("\tAdding",kpts.shape[0],"kpt reflections")
+				for ki in kpts:
 
 					# 4 get FBZ - interpolated FBZ number correspondence for group velocity
 					a = self.vel[ki][ni]

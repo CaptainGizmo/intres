@@ -60,18 +60,12 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 		long YMAX = np_rs[1]
 		long ZMAX = np_rs[2]
 		
-		np.ndarray[complex,ndim=3] rank_out = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
+		np.ndarray[complex,ndim=3] phi_rank = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
 	
 	comm = MPI.COMM_WORLD
 
-	# Distribute workload so that each MPI process analyzes image number i, where
+	# Distribute workload so that each MPI process analyzes point number i, where
 	#  i % comm.size == comm.rank
-	#
-	# For example if comm.size == 4:
-	#   rank 0: 0, 4, 8, ...
-	#   rank 1: 1, 5, 9, ...
-	#   rank 2: 2, 6, 10, ...
-	#   rank 3: 3, 7, 11, ...
 
 	for idx in range(comm.rank, XMAX*YMAX*ZMAX, comm.size):
 			# convert common index to dimention indexes
@@ -85,15 +79,10 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 			r[2] = z/(ZMAX*1.0)
 			
 			#write only our values, all other's are still 0
-			rank_out[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
+			phi_rank[x,y,z] = phi(kpt,igall,nplane,coeff,r) / (Vcell**0.5)
 
-	# Now reduce the matrix into *phi_out* by summing all *out* arrays
-	# them all together. The result is only avalable at rank 0.
-	# If you want the result to be availabe on all processes, use
-	# Allreduce(...)
-	
 	#comm.Reduce(rank_out, phi_out, op=MPI.SUM, root = 0)
 	#comm.Allreduce([rank_out, MPI.C_DOUBLE_COMPLEX], [phi_out, MPI.C_DOUBLE_COMPLEX], op=MPI.SUM)
-	comm.Allreduce(rank_out, phi_out, op=MPI.SUM)
+	comm.Allreduce(phi_rank, phi_out, op=MPI.SUM)
 
 	return
