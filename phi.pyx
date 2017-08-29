@@ -20,10 +20,10 @@ cdef extern from "complex.h" nogil:
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef complex phi(double* kpt, long * igall, long nplane, complex * coeff, double * r) nogil:
+cdef double complex phi(double* kpt, long * igall, long nplane, double complex * coeff, double * r) nogil:
 	cdef:
 		long iplane, dim
-		complex out = 0.0
+		double complex out = 0.0
 		double k_r = 0.0
 	
 	for iplane in range(nplane):
@@ -39,14 +39,14 @@ cdef complex phi(double* kpt, long * igall, long nplane, complex * coeff, double
 cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 				np.ndarray[long, ndim = 2]  np_igall, \
 				long nplane, \
-				np.ndarray[complex, ndim = 1]  np_coeff, \
+				np.ndarray[double complex, ndim = 1]  np_coeff, \
 				double Vcell, \
 				np.ndarray[long, ndim = 1]  np_rs, \
-				complex [:,:,:] phi_out):
+				double complex [:,:,:] phi_out):
 
 	#reshape continious-memory array
 	cdef np.ndarray[long, ndim=2, mode = 'c']    np_buff  = np.ascontiguousarray(np_igall, dtype = long)
-	cdef np.ndarray[complex, ndim=1, mode = 'c'] np_buff2 = np.ascontiguousarray(np_coeff, dtype = complex)
+	cdef np.ndarray[double complex, ndim=1, mode = 'c'] np_buff2 = np.ascontiguousarray(np_coeff, dtype = np.complex128)
 
 	cdef:
 		long x, y, z
@@ -54,13 +54,13 @@ cpdef phi_skn(np.ndarray[double, ndim = 1] np_kpt, \
 		long idx
 		long * igall = <long*> np_buff.data
 		double * kpt = <double*> np_kpt.data
-		complex * coeff = <complex*> np_buff2.data
+		double complex * coeff = <double complex*> np_buff2.data
 		
 		long XMAX = np_rs[0]
 		long YMAX = np_rs[1]
 		long ZMAX = np_rs[2]
 		
-		np.ndarray[complex,ndim=3] phi_rank = np.zeros([XMAX,YMAX,ZMAX],dtype = complex)
+		np.ndarray[double complex,ndim=3] phi_rank = np.zeros([XMAX,YMAX,ZMAX], dtype = np.complex128)
 	
 	comm = MPI.COMM_WORLD
 

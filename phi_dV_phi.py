@@ -31,7 +31,7 @@ class Lifetime(object):
 			self.occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 			self.cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 			self.igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
-			self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
+			self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
 			self.kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 			self.nplane = np.zeros([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
@@ -42,15 +42,6 @@ class Lifetime(object):
 		self.debug = debug
 		self.restart = restart
 
-		#reading wavefunction
-		if self.comm.rank == 0:
-			if self.debug : print('Reading wave-function coefficients from WAVECAR.', flush = True)
-		self.wavecoef()
-		"""
-		else:
-			#self.wavecoef()
-			pass
-		"""
 
 		if self.comm.rank == 0:
 			if self.debug : print('Reading charge perturbation from CHGCAR difference.', flush = True)
@@ -146,6 +137,19 @@ class Lifetime(object):
 		else:
 			self.T2 = None
 		self.T2 = self.comm.bcast(self.T2, root = 0)
+
+		#reading wavefunction
+		if self.comm.rank == 0:
+			if self.debug : print('Reading wave-function coefficients from WAVECAR.', flush = True)
+		self.wavecoef()
+		
+		"""
+		if self.comm.rank == 0:
+			if self.debug : print('Init done', flush = True)
+		if self.debug :
+			print('Rank:',self.comm.rank,'memory allocated:',int(get_size(self.wf)/1024/1024),'MB',flush=True)
+		"""
+
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
@@ -342,7 +346,7 @@ class Lifetime(object):
 				occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 				cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 				igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
-				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
+				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
 				kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 				nplane = np.zeros([nspin,nkpt],dtype='int_')
 			else:
@@ -398,11 +402,13 @@ class Lifetime(object):
 		spin = 0 #non spin-polarized
 
 		# >0 i.e. on all nodes
+		
+		
 		if self.comm.rank == 0:
 			kpt = self.wf.kpt[spin][ki]
 			igall = self.wf.igall[spin][ki]
 			nplane = self.wf.nplane[spin][ki]
-			coeff = self.wf.coeff[spin][ki][ni]
+			coeff = np.asarray(self.wf.coeff[spin][kf][nf],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
@@ -425,7 +431,7 @@ class Lifetime(object):
 			kpt = self.wf.kpt[spin][kf]
 			igall = self.wf.igall[spin][kf]
 			nplane = self.wf.nplane[spin][kf]
-			coeff = self.wf.coeff[spin][kf][nf]
+			coeff = np.asarray(self.wf.coeff[spin][kf][nf],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
