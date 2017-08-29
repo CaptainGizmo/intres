@@ -18,6 +18,8 @@ from math import sin,cos,asin,acos,sqrt
 from mpi4py import MPI
 
 import phi
+
+from getsize import get_size
 from VaspKpointsInterpolated import *
 from ibz2fbz import *
 
@@ -262,6 +264,8 @@ class Lifetime(object):
 		# assign memory
 		wf_rank = Lifetime.wf(nspin,nkpt,npmax,nband)
 		wf_rank.Vcell = Vcell
+		if self.debug :
+			print('Rank:',self.comm.rank,'memory allocated:',int(get_size(wf_rank)/1024/1024),'MB',flush=True)
 
 		# Begin loops over spin, k-points and bands
 		for spin in range(nspin):
@@ -331,27 +335,47 @@ class Lifetime(object):
 					for iplane in range(wf_rank.nplane[spin][ik]):
 						wf_rank.coeff[spin][ik][iband][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
 
-			#if self.comm.rank == 0:
-			self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
-			self.wf.Vcell = Vcell
-			
-			#else:
-			#	self.wf = None
-			"""
-			self.comm.Reduce(wf_rank.occ,    self.wf.occ,    op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.cener,  self.wf.cener,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.igall,  self.wf.igall,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.coeff,  self.wf.coeff,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.kpt,    self.wf.kpt,    op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.nplane, self.wf.nplane, op=MPI.SUM, root = 0)
-			"""
+			if self.comm.rank == 0:
+				self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
+				self.wf.Vcell = Vcell
+				
+				occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
+				cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
+				igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
+				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
+				kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
+				nplane = np.zeros([nspin,nkpt],dtype='int_')
+			else:
+				occ = None
+				cener = None
+				igall = None
+				coeff = None
+				kpt = None
+				nplane = None
 
+			self.comm.Reduce(wf_rank.occ,    occ,    op=MPI.SUM, root = 0)
+			self.comm.Reduce(wf_rank.cener,  cener,  op=MPI.SUM, root = 0)
+			self.comm.Reduce(wf_rank.igall,  igall,  op=MPI.SUM, root = 0)
+			self.comm.Reduce(wf_rank.coeff,  coeff,  op=MPI.SUM, root = 0)
+			self.comm.Reduce(wf_rank.kpt,    kpt,    op=MPI.SUM, root = 0)
+			self.comm.Reduce(wf_rank.nplane, nplane, op=MPI.SUM, root = 0)
+			
+			if self.comm.rank == 0:
+				self.wf.occ = occ
+				self.wf.cener = cener
+				self.wf.igall = igall
+				self.wf.coeff = coeff
+				self.wf.kpt = kpt
+				self.wf.nplane = nplane
+
+			"""
 			self.comm.Allreduce(wf_rank.occ,    self.wf.occ,    op=MPI.SUM)
 			self.comm.Allreduce(wf_rank.cener,  self.wf.cener,  op=MPI.SUM)
 			self.comm.Allreduce(wf_rank.igall,  self.wf.igall,  op=MPI.SUM)
 			self.comm.Allreduce(wf_rank.coeff,  self.wf.coeff,  op=MPI.SUM)
 			self.comm.Allreduce(wf_rank.kpt,    self.wf.kpt,    op=MPI.SUM)
 			self.comm.Allreduce(wf_rank.nplane, self.wf.nplane, op=MPI.SUM)
+			"""
 
 		f.close()
 
