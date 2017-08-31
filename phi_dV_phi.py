@@ -32,6 +32,7 @@ class Lifetime(object):
 			self.cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 			self.igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
 			self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
+			#self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
 			self.kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 			self.nplane = np.zeros([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
@@ -347,6 +348,7 @@ class Lifetime(object):
 				cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 				igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
 				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
+				#coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
 				kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 				nplane = np.zeros([nspin,nkpt],dtype='int_')
 			else:
@@ -408,7 +410,8 @@ class Lifetime(object):
 			kpt = self.wf.kpt[spin][ki]
 			igall = self.wf.igall[spin][ki]
 			nplane = self.wf.nplane[spin][ki]
-			coeff = np.asarray(self.wf.coeff[spin][kf][nf],dtype=np.complex128)
+			coeff = np.asarray(self.wf.coeff[spin][ki][ni],dtype=np.complex128)
+			#coeff = self.wf.coeff[spin][ki][ni]
 			Vcell = self.wf.Vcell
 
 		else:
@@ -432,6 +435,7 @@ class Lifetime(object):
 			igall = self.wf.igall[spin][kf]
 			nplane = self.wf.nplane[spin][kf]
 			coeff = np.asarray(self.wf.coeff[spin][kf][nf],dtype=np.complex128)
+			#coeff = self.wf.coeff[spin][kf][nf]
 			Vcell = self.wf.Vcell
 
 		else:
