@@ -10,7 +10,7 @@ from numpy.lib import pad
 from scipy.linalg import *
 from scipy.constants import *
 from scipy import sparse as sps
-from sympy import DiracDelta
+#from sympy import DiracDelta
 from math import sin,cos,asin,acos,sqrt
 
 #import mpi4py
@@ -28,11 +28,11 @@ class Lifetime(object):
 	class wf():
 		def __init__(self,nspin,nkpt,npmax,nband):
 			# assign memory
+			self.ids = np.zeros([nspin,nkpt], dtype = 'int_')
 			self.occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 			self.cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 			self.igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
 			self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
-			#self.coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
 			self.kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 			self.nplane = np.zeros([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
@@ -91,7 +91,7 @@ class Lifetime(object):
 		self.vel = calc.velocities
 		#print(self.vel.shape)
 
-		if self.comm.rank == 0: 
+		if self.comm.rank == 0:
 			if self.debug:
 				print("Cell vectors:")
 				print(self.cell)
@@ -139,17 +139,27 @@ class Lifetime(object):
 			self.T2 = None
 		self.T2 = self.comm.bcast(self.T2, root = 0)
 
+		# sorting out kpts we don't need
+		# require fix for spin decoupling
+		self.kptlist = []
+		for kpt in range(self.inkpt):
+			flag = 0
+			for n in range(self.nbands):
+				if (self.iocc[kpt][n] == 0.0 or self.iocc[kpt][n] == 1.0) : continue
+				if self.dFdE(kpt,n) == 0: continue
+				flag = 1
+			if flag:
+				if self.comm.rank == 0:
+					print('Adding k point #',kpt, flush=True)
+				self.kptlist.append(kpt)
+		#if self.comm.rank == 0:
+		#	print('kpts:',self.kptlist)
+
 		#reading wavefunction
 		if self.comm.rank == 0:
 			if self.debug : print('Reading wave-function coefficients from WAVECAR.', flush = True)
 		self.wavecoef()
 		
-		"""
-		if self.comm.rank == 0:
-			if self.debug : print('Init done', flush = True)
-		if self.debug :
-			print('Rank:',self.comm.rank,'memory allocated:',int(get_size(self.wf)/1024/1024),'MB',flush=True)
-		"""
 
 
 	def wavecoef(self):
@@ -193,7 +203,7 @@ class Lifetime(object):
 
 		#if self.debug: 
 		if self.comm.rank==0:
-			print('Nuber of K-points',nkpt)
+			print('Nuber of K-points',nkpt,'reading',len(self.kptlist),'of them')
 			print('Number of energy bands',nband)
 			print('Energy cut-off',ecut)
 			print('Lattice vectors:')
@@ -266,11 +276,11 @@ class Lifetime(object):
 			print('max. no. G values; 1,2,3 =',nb1max,nb2max,nb3max)
 			print('estimated max. no. plane waves =',npmax, flush = True)
 
+		nkpt = len(self.kptlist)
 		# assign memory
 		wf_rank = Lifetime.wf(nspin,nkpt,npmax,nband)
 		wf_rank.Vcell = Vcell
-		if self.debug :
-			print('Rank:',self.comm.rank,'memory allocated:',int(get_size(wf_rank)/1024/1024),'MB',flush=True)
+		#if self.debug : print('Rank:',self.comm.rank,'memory allocated:',int(get_size(wf_rank)/1024/1024),'MB',flush=True)
 
 		# Begin loops over spin, k-points and bands
 		for spin in range(nspin):
@@ -281,9 +291,10 @@ class Lifetime(object):
 				print('reading spin ',spin, flush = True)
 
 			for ik in range(self.comm.rank, nkpt, self.comm.size):
-				#for ik in range(nkpt):
+				ikid = self.kptlist[ik]
+				wf_rank.ids[spin][ik] = ikid
 				# search and read
-				recpos = (2 + ik*(nband+1) + spin*nkpt*(nband+1)) * recl
+				recpos = (2 + ikid*(nband+1) + spin*nkpt*(nband+1)) * recl
 				f.seek( recpos )
 				buffer = f.read(recl)
 				dummy = np.empty([int(recl/8)],dtype='d')
@@ -297,7 +308,7 @@ class Lifetime(object):
 
 				if self.debug:
 					# and self.comm.rank==0):
-					print('k point #',ik,'  input no. of plane waves =', wf_rank.nplane[spin][ik], 'k value =',wf_rank.kpt[spin][ik], flush=True)
+					print('k point #',ikid,'  input no. of plane waves =', wf_rank.nplane[spin][ik], 'k value =',wf_rank.kpt[spin][ik], flush=True)
 
 				# Calculate available plane waves
 				ncnt = 0
@@ -344,14 +355,17 @@ class Lifetime(object):
 				self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
 				self.wf.Vcell = Vcell
 				
+				#print(nspin*nkpt*nband*npmax)
+				
+				ids = np.zeros([nspin,nkpt], dtype = 'int_')
 				occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 				cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 				igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
 				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
-				#coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex128')
 				kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
 				nplane = np.zeros([nspin,nkpt],dtype='int_')
 			else:
+				ids = None
 				occ = None
 				cener = None
 				igall = None
@@ -359,6 +373,7 @@ class Lifetime(object):
 				kpt = None
 				nplane = None
 
+			self.comm.Reduce(wf_rank.ids,    ids,    op=MPI.SUM, root = 0)
 			self.comm.Reduce(wf_rank.occ,    occ,    op=MPI.SUM, root = 0)
 			self.comm.Reduce(wf_rank.cener,  cener,  op=MPI.SUM, root = 0)
 			self.comm.Reduce(wf_rank.igall,  igall,  op=MPI.SUM, root = 0)
@@ -367,6 +382,7 @@ class Lifetime(object):
 			self.comm.Reduce(wf_rank.nplane, nplane, op=MPI.SUM, root = 0)
 			
 			if self.comm.rank == 0:
+				self.wf.ids = ids
 				self.wf.occ = occ
 				self.wf.cener = cener
 				self.wf.igall = igall
@@ -384,6 +400,8 @@ class Lifetime(object):
 			"""
 
 		f.close()
+		
+		if self.comm.rank == 0:  print('Reading wavefunction coefficients is done.', flush = True)
 
 		return
 
@@ -405,16 +423,17 @@ class Lifetime(object):
 
 		# >0 i.e. on all nodes
 		
-		
 		if self.comm.rank == 0:
-			kpt = self.wf.kpt[spin][ki]
-			igall = self.wf.igall[spin][ki]
-			nplane = self.wf.nplane[spin][ki]
-			coeff = np.asarray(self.wf.coeff[spin][ki][ni],dtype=np.complex128)
-			#coeff = self.wf.coeff[spin][ki][ni]
+			idki = np.where(self.wf.ids[spin] == ki)[0][0]
+			kpt = self.wf.kpt[spin][idki]
+			igall = self.wf.igall[spin][idki]
+			nplane = self.wf.nplane[spin][idki]
+			coeff = np.asarray(self.wf.coeff[spin][idki][ni],dtype=np.complex128)
+			#coeff = self.wf.coeff[spin][idki][ni]
 			Vcell = self.wf.Vcell
 
 		else:
+			idki = None
 			kpt = None
 			igall = None
 			nplane = None
@@ -429,16 +448,17 @@ class Lifetime(object):
 
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_i)
 
-		# >0 i.e. on all nodes
 		if self.comm.rank == 0:
-			kpt = self.wf.kpt[spin][kf]
-			igall = self.wf.igall[spin][kf]
-			nplane = self.wf.nplane[spin][kf]
-			coeff = np.asarray(self.wf.coeff[spin][kf][nf],dtype=np.complex128)
-			#coeff = self.wf.coeff[spin][kf][nf]
+			idkf = np.where(self.wf.ids[spin] == kf)[0][0]
+			kpt = self.wf.kpt[spin][idkf]
+			igall = self.wf.igall[spin][idkf]
+			nplane = self.wf.nplane[spin][idkf]
+			coeff = np.asarray(self.wf.coeff[spin][idkf][nf],dtype=np.complex128)
+			#coeff = self.wf.coeff[spin][idkf][nf]
 			Vcell = self.wf.Vcell
 
 		else:
+			idkf = None
 			kpt = None
 			igall = None
 			nplane = None
@@ -481,7 +501,7 @@ class Lifetime(object):
 		return 1.0 #/(pow(2.0 * pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
 
 
-	def dFde(self,k,n):
+	def dFdE(self,k,n):
 		# derivative of Fermi distribution
 		sigma = self.sigma
 		x = self.ene[k][n] - self.fermi
@@ -616,7 +636,7 @@ class Lifetime(object):
 					proj2 = np.dot(vel,[1,0,0]) * 1e5
 
 					if self.comm.rank == 0:
-						mob += tau * self.dFde(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
+						mob += tau * self.dFdE(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
 		
 		if self.comm.rank == 0:
@@ -639,7 +659,6 @@ def main(nf = 0, kf = 0):
 
 	if lt.comm.rank == 0:
 		if lt.debug: print("Data readed in",int(t1-t0),'s.')
-
 	mob = lt.mobility()
 
 	if lt.comm.rank == 0:
