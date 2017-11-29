@@ -277,10 +277,15 @@ class Lifetime(object):
 			print('estimated max. no. plane waves =',npmax, flush = True)
 
 		nkpt = len(self.kptlist)
-		# assign memory
-		wf_rank = Lifetime.wf(nspin,nkpt,npmax,nband)
-		wf_rank.Vcell = Vcell
-		#if self.debug : print('Rank:',self.comm.rank,'memory allocated:',int(get_size(wf_rank)/1024/1024),'MB',flush=True)
+
+		################### create the output structure ########################################
+		
+		if self.comm.rank == 0:
+			self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
+			self.wf.Vcell = Vcell
+
+		################## read structures: spin, kpt on each thread ###########################
+		################## read coeffs parallelized by band          ###########################
 
 		# Begin loops over spin, k-points and bands
 		for spin in range(nspin):
@@ -290,27 +295,32 @@ class Lifetime(object):
 				print('********')
 				print('reading spin ',spin, flush = True)
 
-			for ik in range(self.comm.rank, nkpt, self.comm.size):
+			# loop over selected Kpts
+			for ik in range(nkpt):
+				# get real number of Kpt
 				ikid = self.kptlist[ik]
-				wf_rank.ids[spin][ik] = ikid
-				# search and read
+				if self.comm.rank == 0:
+					self.wf.ids[spin][ik] = ikid
+				# search and read information about the band
 				recpos = (2 + ikid*(nband+1) + spin*nkpt*(nband+1)) * recl
-				f.seek( recpos )
+				f.seek(recpos)
 				buffer = f.read(recl)
 				dummy = np.empty([int(recl/8)],dtype='d')
 				fmt=str(int(recl/8))+'d'
 				(dummy) = struct.unpack(fmt,buffer)
-				wf_rank.nplane[spin][ik]=int(dummy[0])
-				wf_rank.kpt[spin][ik] = np.array(dummy[1:4])
+				if self.comm.rank == 0:
+					self.wf.nplane[spin][ik]=int(dummy[0])
+					self.wf.kpt[spin][ik] = np.array(dummy[1:4])
 				for i in range(nband):
-					wf_rank.cener[spin][ik][i] = dummy[5+2*i] + 1j * dummy[5+2*i+1]
-					wf_rank.occ[spin][ik][i] = dummy[5+2*nband+i]
+					pass
+					if self.comm.rank == 0:
+						self.wf.cener[spin][ik][i] = dummy[5+2*i] + 1j * dummy[5+2*i+1]
+						self.wf.occ[spin][ik][i] = dummy[5+2*nband+i]
 
-				if self.debug:
-					# and self.comm.rank==0):
-					print('k point #',ikid,'  input no. of plane waves =', wf_rank.nplane[spin][ik], 'k value =',wf_rank.kpt[spin][ik], flush=True)
+				if self.debug and self.comm.rank==0 :
+					print('k point #',ikid,'  input no. of plane waves =', self.wf.nplane[spin][ik], 'k value =', self.wf.kpt[spin][ik], flush=True)
 
-				# Calculate available plane waves
+				# Calculate available plane waves for selected Kpt
 				ncnt = 0
 				for ig3 in range(0, 2*nb3max+1):
 					ig3p = ig3
@@ -323,84 +333,62 @@ class Lifetime(object):
 							ig1p = ig1
 							if ig1 > nb1max: ig1p = ig1 - 2*nb1max - 1
 
-							sumkg = np.empty([3],dtype='d')
-							for j in range(3):
-								sumkg[j] = (wf_rank.kpt[spin][ik][0] + ig1p) * b1[j] \
-										 + (wf_rank.kpt[spin][ik][1] + ig2p) * b2[j] \
-										 + (wf_rank.kpt[spin][ik][2] + ig3p) * b3[j]
+							if self.comm.rank == 0:
+								sumkg = np.zeros([3],dtype='d')
+								for j in range(3):
+									sumkg[j] = (self.wf.kpt[spin][ik][0] + ig1p) * b1[j] \
+										 + (self.wf.kpt[spin][ik][1] + ig2p) * b2[j] \
+										 + (self.wf.kpt[spin][ik][2] + ig3p) * b3[j]
 
-							gtot = norm(sumkg)
-							etot = gtot*gtot/c
+								gtot = norm(sumkg)
+								etot = gtot*gtot/c
 							
-							if etot < ecut :
-								wf_rank.igall[spin][ik][ncnt][0] = ig1p
-								wf_rank.igall[spin][ik][ncnt][1] = ig2p
-								wf_rank.igall[spin][ik][ncnt][2] = ig3p
-								ncnt += 1
+								if etot < ecut :
+									self.wf.igall[spin][ik][ncnt][0] = ig1p
+									self.wf.igall[spin][ik][ncnt][1] = ig2p
+									self.wf.igall[spin][ik][ncnt][2] = ig3p
+									ncnt += 1
 
-				if ncnt > npmax:
-					sys.exit('*** error - plane wave count exceeds estimate')
-				if ncnt != wf_rank.nplane[spin][ik] :
-					sys.exit('*** error - computed no. '+str(ncnt)+' != input no.'+str(wf_rank.nplane[spin][ik]))
+				if self.comm.rank == 0:
+					if ncnt > npmax:
+						sys.exit('*** error - plane wave count exceeds estimate')
+					if ncnt != self.wf.nplane[spin][ik] :
+						sys.exit('*** error - computed no. '+str(ncnt)+' != input no.'+str(self.wf.nplane[spin][ik]))
 
-				# read planewave coefficients for each energy band at given K-point
-				for iband in range(wf_rank.nband):
+				######### read planewave coefficients for each energy band at given K-point ####################
+				rank_k_coeff = np.zeros([nband,npmax],dtype='complex64')
+
+				if self.comm.rank == 0:
+					npl = self.wf.nplane[spin][ik]
+				else:
+					npl = None
+				npl = self.comm.bcast(npl,root=0)
+
+				# read coeffs in parallel
+				for iband in range(self.comm.rank, nband, self.comm.size):
+					recpos = (2 + ikid*(nband+1) + spin*nkpt*(nband+1) + (iband+1) ) * recl
+					f.seek(recpos)
 					buffer = f.read(recl)
-					fmt=str(int(8*wf_rank.nplane[spin][ik]/4))+'f'
-					(dummy) = struct.unpack(fmt,buffer[:int(8*wf_rank.nplane[spin][ik])])
-					for iplane in range(wf_rank.nplane[spin][ik]):
-						wf_rank.coeff[spin][ik][iband][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
-
-			if self.comm.rank == 0:
-				self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
-				self.wf.Vcell = Vcell
+					fmt=str(int(8*npl/4))+'f'
+					(dummy) = struct.unpack(fmt,buffer[:int(8*npl)])
+					for iplane in range(npl):
+						rank_k_coeff[iband][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
+					#print(ik,iband,recpos,fmt,npl,rank_k_coeff[iband][0],"www")
+					#print(ik,iband,npl,"www")
+					#print(ik,iband,rank_k_coeff[0][0],"www")
 				
-				#print(nspin*nkpt*nband*npmax)
-				
-				ids = np.zeros([nspin,nkpt], dtype = 'int_')
-				occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
-				cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
-				igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
-				coeff = np.zeros([nspin,nkpt,nband,npmax],dtype='complex64')
-				kpt   = np.zeros([nspin,nkpt,3],dtype='float64')
-				nplane = np.zeros([nspin,nkpt],dtype='int_')
-			else:
-				ids = None
-				occ = None
-				cener = None
-				igall = None
-				coeff = None
-				kpt = None
-				nplane = None
+				# collect coeffs from slave nodes to the root node
+				if self.comm.rank == 0:
+					k_coeff = np.zeros([nband,npmax],dtype='complex64')
+				else:
+					k_coeff = None
+				self.comm.Reduce(rank_k_coeff,  k_coeff,  op=MPI.SUM, root = 0)
 
-			self.comm.Reduce(wf_rank.ids,    ids,    op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.occ,    occ,    op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.cener,  cener,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.igall,  igall,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.coeff,  coeff,  op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.kpt,    kpt,    op=MPI.SUM, root = 0)
-			self.comm.Reduce(wf_rank.nplane, nplane, op=MPI.SUM, root = 0)
-			
-			if self.comm.rank == 0:
-				self.wf.ids = ids
-				self.wf.occ = occ
-				self.wf.cener = cener
-				self.wf.igall = igall
-				self.wf.coeff = coeff
-				self.wf.kpt = kpt
-				self.wf.nplane = nplane
-
-			"""
-			self.comm.Allreduce(wf_rank.occ,    self.wf.occ,    op=MPI.SUM)
-			self.comm.Allreduce(wf_rank.cener,  self.wf.cener,  op=MPI.SUM)
-			self.comm.Allreduce(wf_rank.igall,  self.wf.igall,  op=MPI.SUM)
-			self.comm.Allreduce(wf_rank.coeff,  self.wf.coeff,  op=MPI.SUM)
-			self.comm.Allreduce(wf_rank.kpt,    self.wf.kpt,    op=MPI.SUM)
-			self.comm.Allreduce(wf_rank.nplane, self.wf.nplane, op=MPI.SUM)
-			"""
+				# save coeffs for the chosen Kpt
+				if self.comm.rank == 0:
+					self.wf.coeff[spin][ik] = k_coeff
 
 		f.close()
-		
 		if self.comm.rank == 0:  print('Reading wavefunction coefficients is done.', flush = True)
 
 		return
