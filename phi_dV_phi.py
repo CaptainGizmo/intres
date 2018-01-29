@@ -58,6 +58,9 @@ class Lifetime(object):
 
 		# real space calculation reduction, calculate only every scale-th point
 		self.scale = 1
+		
+		#default distance between erergy of points in parts of fermi smearing
+		self.ds = 0.1
 
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
@@ -97,6 +100,7 @@ class Lifetime(object):
 				print(self.cell)
 				print("Number of k-points in full IBZ interploated:",self.inkpt)
 				print("Number of k-points in full BZ interpolated:",self.nkpt)
+				print
 
 
 		if self.comm.rank == 0:
@@ -114,6 +118,7 @@ class Lifetime(object):
 			if self.debug:
 				print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
 				print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
+				print
 
 		# for cubic cell
 		self.dr = np.array([0,0,0],dtype='float64')
@@ -138,15 +143,28 @@ class Lifetime(object):
 		else:
 			self.T2 = None
 		self.T2 = self.comm.bcast(self.T2, root = 0)
+		
+		# search for bands which are in principle crossing the FS
+		self.band_list=[]
+		for band in range(self.nbands):
+			emax=np.max(self.ene[:,band])
+			emin=np.min(self.ene[:,band])
+			if self.fermi >= emin and self.fermi <= emax :
+				self.band_list.append(band)
+		self.band_list = np.array(self.band_list)
+		if self.comm.rank == 0:
+			if self.debug:
+				print("Found",self.band_list.shape[0],"bands crossing FS")
+				print
 
 		# sorting out kpts we don't need
 		# require fix for spin decoupling
 		self.kptlist = []
 		for kpt in range(self.inkpt):
 			flag = 0
-			for n in range(self.nbands):
+			for n in self.band_list:
 				if (self.iocc[kpt][n] == 0.0 or self.iocc[kpt][n] == 1.0) : continue
-				if self.dFdE(kpt,n) == 0: continue
+				#if self.dFdE(kpt,n) == 0: continue
 				flag = 1
 			if flag:
 				if self.comm.rank == 0:
@@ -157,7 +175,9 @@ class Lifetime(object):
 
 		#reading wavefunction
 		if self.comm.rank == 0:
-			if self.debug : print('Reading wave-function coefficients from WAVECAR.', flush = True)
+			if self.debug :
+				print('\nReading wave-function coefficients from WAVECAR.', flush = True)
+				print
 		self.wavecoef()
 		
 
@@ -508,7 +528,7 @@ class Lifetime(object):
 		dk = self.dk # unitless 0..2pi
 
 		# loop over all initial energy levels
-		for ni in range(self.nbands):
+		for ni in self.band_list:
 
 			# scatering coefficient for n-th k-point
 			R_n = 0.0
@@ -528,7 +548,7 @@ class Lifetime(object):
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf] 
 				
-				if abs(ei - ef) > self.sigma*0.1: continue
+				if abs(ei - ef) > self.sigma*self.ds: continue
 
 				# 6 check if we have cached value for calculated T element
 				init = iki*self.nbands + ni
@@ -594,7 +614,7 @@ class Lifetime(object):
 		e = 1.0 # in electrons
 		mob = 0.0
 
-		for nf in range(self.nbands):
+		for nf in self.band_list:
 			# loop over all k-points
 			for ikf in range(self.inkpt):
 
@@ -644,6 +664,7 @@ def main(nf = 0, kf = 0):
 	t1 = time.time()
 
 	if len(sys.argv) > 1: lt.scale =  int(sys.argv[1])
+	if len(sys.argv) > 3: lt.ds =  int(sys.argv[2])
 
 	if lt.comm.rank == 0:
 		if lt.debug: print("Data readed in",int(t1-t0),'s.')
