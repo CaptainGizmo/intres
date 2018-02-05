@@ -50,13 +50,15 @@ class VaspKpointsInterpolated:
              'nelect',
              'kinter',
              'efermi_interpolated',
-             'dos']
+             'dos',
+             'basis',
+             'rec_basis']
     
     def __init__(self, filename='vasprun.xml', tolerance=1e-5):
         self.data = d = {}
-        #self.comm = MPI.COMM_WORLD
         self.basis = None
         self.rec_basis = None
+        self.dk = None
         
         # data for irreducible interpolated
         self.ienergies = None
@@ -65,7 +67,6 @@ class VaspKpointsInterpolated:
         self.inkpts = None
         self.inbands = None
         self.ipopulations = None
-        self.dk = None
         
         # data for full interpolated
         self.energies = None
@@ -73,6 +74,7 @@ class VaspKpointsInterpolated:
         self.kpts = None
         self.nkpts = None
         self.nbands = None
+        self.populations = None
 
         self.kptgrid_type = None
         self.kptgrid_divisions = None
@@ -119,6 +121,7 @@ class VaspKpointsInterpolated:
         #if self.comm.rank == 0: 
         print("parsing k-point grid information")
         self.dk = []
+
         for block in xmldoc.findall("kpoints/generation"):
             if not 'param' in block.attrib:
                 continue
@@ -138,6 +141,16 @@ class VaspKpointsInterpolated:
         print ("k-point grid: ",self.kptgrid_type)
         print ("k-point step: ",self.kptgrid_divisions)
         print
+
+        self.ikpts = []
+        for element in xmldoc.findall('kpoints/varray'):
+            if not 'name' in element.attrib:
+                continue
+            if element.attrib['name'] == 'kpointlist':
+                for v in element.findall('v'):
+                    self.ikpts.append([float(x) for x in v.text.split()])
+        self.ikpts = np.array(self.ikpts)
+        self.inkpts = len(self.ikpts)
 
 
         # 2) extract value of KINTER
@@ -192,14 +205,15 @@ class VaspKpointsInterpolated:
                        rec = []
                        for v in list(element):
                            rec.append([float(x) for x in v.text.split()])
-                       self.rec_basis = vec
+                       self.rec_basis = rec
         self.basis = np.array(self.basis)
         self.rec_basis = np.array(self.rec_basis)
 
         # ======================================================================================
-
+        # VASP 5.4.4 -> no IBZ in vasprun.xml
         # 4) locate eigenvalues block with interpolated data
         #if self.comm.rank == 0: 
+        """
         print("locating interpolated data for IBZ")
         block = None
         for block in xmldoc.findall("calculation/eigenvalues/velocities"):
@@ -215,7 +229,7 @@ class VaspKpointsInterpolated:
         #if self.comm.rank == 0: 
         print("parsing k-point grid information for IBZ")
         self.ikpts = []
-        for element in block.findall('kpoints_ibz/varray'):
+        for element in block.findall('kpoints/varray'):
             if not 'name' in element.attrib:
                 continue
             if element.attrib['name'] == 'kpointlist':
@@ -223,7 +237,6 @@ class VaspKpointsInterpolated:
                     self.ikpts.append([float(x) for x in v.text.split()])
         self.ikpts = np.array(self.ikpts)
         self.inkpts = len(self.ikpts)
-
 
         # 6) extract eigen energies and group velocities
         #if self.comm.rank == 0: 
@@ -259,6 +272,7 @@ class VaspKpointsInterpolated:
         self.ivelocities = np.array(self.ivelocities)
         self.ipopulations = np.array(self.ipopulations)
         self.inbands = len(self.ienergies[0])
+        """
 
         # ============================================================
 
@@ -266,12 +280,15 @@ class VaspKpointsInterpolated:
         #if self.comm.rank == 0: 
         print("locating interpolated data for the full BZ")
 
-        for block in xmldoc.findall("calculation/eigenvalues/electronvelocities"):
+        # VASP 5.4.1
+        #for block in xmldoc.findall("calculation/eigenvalues/electronvelocities"):
+        # VASP 5.4.4
+        for block in xmldoc.findall("calculation/eigenvelocities"):
             if 'comment' in block.attrib:
-                if block.attrib['comment'] == 'interpolated_ibz':
+                if block.attrib['comment'] == 'interpolated':
                     break
         if block is None:
-            print("ERROR: failed to locate interpolated eigenvalues for full BZ in input file")
+            print("ERROR: failed to locate interpolated eigenvelocities for full BZ in input file")
             exit(1)
 
 
@@ -307,6 +324,31 @@ class VaspKpointsInterpolated:
         self.velocities = np.array(self.velocities)
         self.nbands = len(self.energies[0])
 
+        # 6) extract occupancies
+        for block in xmldoc.findall("calculation/eigenvalues"):
+            if 'comment' in block.attrib:
+                # VASP 5.4.1
+                #if block.attrib['comment'] == 'interpolated_ibz':
+                # VASP 5.4.4
+                if block.attrib['comment'] == None:
+                    break
+        if block is None:
+            print("ERROR: failed to locate eigenvalues for full BZ in input file")
+            exit(1)
+
+
+        #if self.comm.rank == 0: 
+        print("parsing occupancies")
+        self.populations = []
+        for element in block.findall('array/*/*/set'):
+            if 'kpoint' in element.attrib['comment']:
+                en = []
+                pop = []
+                for v in list(element):
+                    pop.append(float(v.text.split()[1]))
+                self.populations.append(pop)
+        self.populations = np.array(self.populations)
+        #print("Found",self.populations.shape,"occupancies")
 
         # ===========================================================
 
@@ -449,4 +491,5 @@ class VaspKpointsInterpolated:
     kptgrid_type = myproperty('kptgrid_type', 'type of k-point grid')
     kptgrid_divisions = myproperty('kptgrid_divisions', 'divisions of k-point grid')
     efermi_interpolated = myproperty('efermi_interpolated', 'Fermi energy from interpolated k-point grid')
-
+    basis = myproperty('basis', 'Cell vectors')
+    rec_basis = myproperty('rec_basis', 'Reciprocal vectors')

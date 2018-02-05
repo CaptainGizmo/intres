@@ -75,14 +75,15 @@ class Lifetime(object):
 		self.cell = calc.basis
 
 		# parameters for K-points in IBZ (formally interpolated, but with scaling factor 1)
-		self.inkpt = calc.inkpts
-		self.ikpts = calc.ikpts
-		self.iene = calc.ienergies
-		self.ivel = calc.ivelocities
-		self.iocc = calc.ipopulations
-		self.kgrid = calc.kptgrid_divisions
+		#self.inkpt = calc.inkpts
+		#self.ikpts = calc.ikpts
+		#self.iene = calc.ienergies
+		#self.ivel = calc.ivelocities
 
-		self.nbands = calc.inbands
+		self.occ = calc.populations
+
+		self.kgrid = calc.kptgrid_divisions
+		self.nbands = calc.nbands
 		self.sigma = calc.sigma
 		self.fermi = calc.efermi_interpolated
 		self.nelect = calc.nelect
@@ -92,16 +93,6 @@ class Lifetime(object):
 		self.kpts = calc.kpts
 		self.ene = calc.energies
 		self.vel = calc.velocities
-		#print(self.vel.shape)
-
-		if self.comm.rank == 0:
-			if self.debug:
-				print("Cell vectors:")
-				print(self.cell)
-				print("Number of k-points in full IBZ interploated:",self.inkpt)
-				print("Number of k-points in full BZ interpolated:",self.nkpt)
-				print
-
 
 		if self.comm.rank == 0:
 			# mapping for k-points from IBZ to FBZ
@@ -114,11 +105,28 @@ class Lifetime(object):
 		self.nibz2fbz = i2f.nitpi2f
 		self.ibz2fbz = i2f.itpi2f
 
+		#find IBZ Kpts:
+		self.ikpts=[]
+		for kpt in range(self.nkpt):
+			# check that Kpt is from IBZ:
+			if kpt == self.ibz2fbz[kpt]:
+				self.ikpts.append(kpt)
+		self.ikpts = np.array(self.ikpts)
+		self.inkpt = self.ikpts.shape[0]
+
 		if self.comm.rank == 0:
 			if self.debug:
-				print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
-				print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
+				print("Cell vectors:")
+				print(self.cell)
+				print("Number of k-points in full IBZ interploated:",self.inkpt)
+				print("Number of k-points in full BZ interpolated:",self.nkpt)
 				print
+
+		#if self.comm.rank == 0:
+		#	if self.debug:
+		#		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
+		#		print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
+		#		print
 
 		# for cubic cell
 		self.dr = np.array([0,0,0],dtype='float64')
@@ -163,15 +171,14 @@ class Lifetime(object):
 		for kpt in range(self.inkpt):
 			flag = 0
 			for n in self.band_list:
-				if (self.iocc[kpt][n] == 0.0 or self.iocc[kpt][n] == 1.0) : continue
+				if (self.occ[kpt][n] == 0.0 or self.occ[kpt][n] == 1.0) : continue
 				#if self.dFdE(kpt,n) == 0: continue
 				flag = 1
 			if flag:
 				if self.comm.rank == 0:
 					print('Adding k point #',kpt, flush=True)
 				self.kptlist.append(kpt)
-		#if self.comm.rank == 0:
-		#	print('kpts:',self.kptlist)
+		self.kptlist=np.array(self.kptlist)
 
 		#reading wavefunction
 		if self.comm.rank == 0:
@@ -296,7 +303,7 @@ class Lifetime(object):
 			print('max. no. G values; 1,2,3 =',nb1max,nb2max,nb3max)
 			print('estimated max. no. plane waves =',npmax, flush = True)
 
-		nkpt = len(self.kptlist)
+		nkpt = self.kptlist.shape[0]
 
 		################### create the output structure ########################################
 		
@@ -520,6 +527,7 @@ class Lifetime(object):
 		"Get inverse lifetime for state n, k"
 		# defect dencity per cubic Angstr
 		nd = 1.0 # per atom, actuall will be 1e-20 or so
+		ikf = kf # we already supply only indeces from IBZ
 
 		hbar = 4.135667662e-15 # eV*s
 
@@ -534,15 +542,10 @@ class Lifetime(object):
 			R_n = 0.0
 
 			# loop over initial k-points in IBZ
-			for iki in range(self.inkpt):
-
-
-				
-				ikf = kf # we already supply only indeces from IBZ
+			for iki in self.kptlist:
 
 				# 3 find if we in proximity of Ef
-				#if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni]==2.0): continue
-				if (self.iocc[iki][ni] == 0.0 or self.iocc[iki][ni] == 1.0) : continue
+				if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni] == 1.0) : continue
 
 				# 7 get eigenstates
 				ei = self.ene[iki][ni]
@@ -616,14 +619,14 @@ class Lifetime(object):
 
 		for nf in self.band_list:
 			# loop over all k-points
-			for ikf in range(self.inkpt):
+			for ikf in self.kptlist:
 
 				
 				# 2 get FBZ - IBZ number correspondance
 				#ikf = self.ibz2fbz[kf]
 
 				# 3 find if we in proximity of Ef
-				if (self.iocc[ikf][nf] == 0.0 or self.iocc[ikf][nf]==1.0): continue
+				if (self.occ[ikf][nf] == 0.0 or self.occ[ikf][nf]==1.0): continue
 
 				vel = self.vel[ikf][nf]
 				# check for [0,0,0] velocity

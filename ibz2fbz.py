@@ -17,12 +17,14 @@ class ibz2fbz:
 
         if isinstance(self.filename, str):
             f = open(self.filename)
-        noninterp = None
-        interp = None
+        nitpi2f = None
+        itpi2f = None
+        i2f = []
 
         for n,line in enumerate(f):
             if 'k-points in 1st BZ' in line:
                 #initiate temporary array
+                self.nitpi2f = np.array(i2f)
                 i2f = []
 
             if 'KPOINTS_INTER' in line:
