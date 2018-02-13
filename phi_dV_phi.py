@@ -42,6 +42,7 @@ class Lifetime(object):
 		self.comm = MPI.COMM_WORLD
 		self.debug = debug
 		self.restart = restart
+		self.T2file = "./data_sparse.npz"
 
 
 		if self.comm.rank == 0:
@@ -145,8 +146,9 @@ class Lifetime(object):
 		if self.comm.rank == 0:
 			# cached value of scattering probability matrix (squared elements)
 			self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
-			if (self.restart):
-				data = sps.load_npz("./data_sparse.npz")
+			#if (self.restart):
+			if os.path.isfile(self.T2file) :
+				data = sps.load_npz(self.T2file)
 				self.T2 = data.todok()
 		else:
 			self.T2 = None
@@ -400,9 +402,6 @@ class Lifetime(object):
 					(dummy) = struct.unpack(fmt,buffer[:int(8*npl)])
 					for iplane in range(npl):
 						rank_k_coeff[iband][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
-					#print(ik,iband,recpos,fmt,npl,rank_k_coeff[iband][0],"www")
-					#print(ik,iband,npl,"www")
-					#print(ik,iband,rank_k_coeff[0][0],"www")
 				
 				# collect coeffs from slave nodes to the root node
 				if self.comm.rank == 0:
@@ -444,7 +443,6 @@ class Lifetime(object):
 			igall = self.wf.igall[spin][idki]
 			nplane = self.wf.nplane[spin][idki]
 			coeff = np.asarray(self.wf.coeff[spin][idki][ni],dtype=np.complex128)
-			#coeff = self.wf.coeff[spin][idki][ni]
 			Vcell = self.wf.Vcell
 
 		else:
@@ -469,7 +467,6 @@ class Lifetime(object):
 			igall = self.wf.igall[spin][idkf]
 			nplane = self.wf.nplane[spin][idkf]
 			coeff = np.asarray(self.wf.coeff[spin][idkf][nf],dtype=np.complex128)
-			#coeff = self.wf.coeff[spin][idkf][nf]
 			Vcell = self.wf.Vcell
 
 		else:
@@ -499,11 +496,8 @@ class Lifetime(object):
 		T = self.comm.allreduce(Trank,op=MPI.SUM)
 
 		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
-		#Ti *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
-		#Tf *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3)
 		
 		if self.comm.rank==0:
-			#print('\t<{},{}|V|{},{}> = {:f} <i|i> = {:f} <f|f> = {:f}'.format(kf,nf,ki,ni,abs(T),abs(Ti),abs(Tf)))
 			print('\t<{},{}|V|{},{}> = {:e} '.format(kf,nf,ki,ni,abs(T)))
 		return T
 
@@ -551,11 +545,19 @@ class Lifetime(object):
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf] 
 				
-				if abs(ei - ef) > self.sigma*self.ds: continue
+				if abs(ei - ef) > self.sigma*self.ds: 
+					#print("+",ei,ef,abs(ei - ef),self.sigma*self.ds,self.occ[iki][ni],self.occ[ikf][nf])
+					continue
+				#else:
+				#	print("-",ei,ef,abs(ei - ef),self.sigma*self.ds,self.occ[iki][ni],self.occ[ikf][nf])
 
 				# 6 check if we have cached value for calculated T element
 				init = iki*self.nbands + ni
 				final = ikf*self.nbands + nf
+				
+				# plug
+				#self.T2[init,final] = 0.1
+				
 				if not self.T2[init,final]:
 					t0 = time.time()
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
@@ -566,6 +568,12 @@ class Lifetime(object):
 					if self.comm.rank==0:
 						print('\tT(', iki, ni, '=>', ikf, nf, ') =',sqrt(self.T2[init,final])*1000.0,'meV REUSE', flush=True)
 				T2 = self.T2[init,final]
+				
+				#save new T
+				if self.comm.rank == 0:
+					#data_save = sps.csc_matrix(self.T2)
+					#sps.save_npz(self.T2file, matrix)
+					pass
 
 				# sum over all reflections of reduced K-point
 				kpts = np.where(self.ibz2fbz == iki)[0]
@@ -633,6 +641,7 @@ class Lifetime(object):
 				if(not LA.norm(vel)): continue
 
 				R_nk = self.R(ikf,nf)
+				#print("ene",self.ene[ikf][nf])
 
 				if not R_nk: continue
 				else: tau = 1.0 / R_nk
@@ -666,11 +675,17 @@ def main(nf = 0, kf = 0):
 	lt = Lifetime(debug,restart)
 	t1 = time.time()
 
-	if len(sys.argv) > 1: lt.scale =  int(sys.argv[1])
-	if len(sys.argv) > 3: lt.ds =  int(sys.argv[2])
+	if len(sys.argv) > 1: 
+		lt.scale =  int(sys.argv[1])
+		if lt.comm.rank == 0 : print("Reading scale factor for local potential 1 /", lt.scale, flush = True)
+	if len(sys.argv) > 2: 
+		lt.ds =  int(sys.argv[2])
+		if lt.comm.rank == 0 : print("Reading energy distanse", lt.ds, "of Fermi smearing.", flush = True)
 
 	if lt.comm.rank == 0:
-		if lt.debug: print("Data readed in",int(t1-t0),'s.')
+		print("Data readed in",int(t1-t0),'s.')
+		print("="*100)
+		print()
 	mob = lt.mobility()
 
 	if lt.comm.rank == 0:
