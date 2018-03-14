@@ -38,15 +38,28 @@ class Lifetime(object):
 			self.Vcell = 0
 			self.nband = nband
 
-	def __init__(self, debug=False, restart= False):
+	def __init__(self, debug = True, restart = True, scale = 1):
 		self.comm = MPI.COMM_WORLD
 		self.debug = debug
 		self.restart = restart
-		self.T2file = "./data_sparse.npz"
+		# real space calculation reduction, calculate only every scale-th point
+		self.scale = scale
+		self.T2file = "data_sparse."+str(self.scale)+".npz"
+
+		#default distance between erergy of points in parts of fermi smearing
+		self.ds = 1
 
 
+		# electron charge, since we work in eV units
+		#e = -1.6e-19 # coulomb
+		self.e = 1.0 # in electrons
+
+		# carriers per atomic site
+		self.ncarr =  3. #Aluminum
+
+		##########################################################################################################################
 		if self.comm.rank == 0:
-			if self.debug : print('Reading charge perturbation from CHGCAR difference.', flush = True)
+			if self.debug : print('* Reading charge perturbation from CHGCAR difference.', flush = True)
 			self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
 			self.charge = self.CHGCAR.chg[0]
 		else:
@@ -57,37 +70,30 @@ class Lifetime(object):
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype='int_')
 
-		# real space calculation reduction, calculate only every scale-th point
-		self.scale = 1
-		
-		#default distance between erergy of points in parts of fermi smearing
-		self.ds = 0.1
-
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
+		
+		##########################################################################################################################
 
 		if self.comm.rank == 0:
-			if self.debug : print('Reading simulation configuration and group velocities from vasprun.xml', flush = True)
+			if self.debug : print('\n* Reading simulation configuration and group velocities from vasprun.xml', flush = True)
 			calc = VaspKpointsInterpolated("vasprun.xml")
 		else:
 			calc = None
 		calc = self.comm.bcast(calc, root = 0)
 
 		self.cell = calc.basis
-
-		# parameters for K-points in IBZ (formally interpolated, but with scaling factor 1)
-		#self.inkpt = calc.inkpts
-		#self.ikpts = calc.ikpts
-		#self.iene = calc.ienergies
-		#self.ivel = calc.ivelocities
-
 		self.occ = calc.populations
-
 		self.kgrid = calc.kptgrid_divisions
 		self.nbands = calc.nbands
 		self.sigma = calc.sigma
 		self.fermi = calc.efermi_interpolated
 		self.nelect = calc.nelect
+		self.natoms = calc.natoms
+
+		# defect dencity per atomic site
+		self.nd = 1./(self.natoms + 1.) # 1 per cell, +1 since vacancy
+
 
 		# parameters for K-points in full BZ (formally interpolated, but with scaling factor 1)
 		self.nkpt = calc.nkpts
@@ -95,12 +101,51 @@ class Lifetime(object):
 		self.ene = calc.energies
 		self.vel = calc.velocities
 
+
+
+
+		# for ortho cell
+		self.dr = np.array([0,0,0],dtype='float64')
+		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] # in Ang, r - number points of LOCPOT grid
+
+		# step of K-mesh in reciprocal space
+		self.dk = np.array([0,0,0],dtype='float')
+		for i in range(3): self.dk[i] = LA.norm(calc.rec_basis[i]) / self.kgrid[i]  # unitless
+		#for i in range(3): self.dk[i] = 2 * pi / (self.kgrid[i] + 0.0) # unitless!!!!
+
+		# search for bands which are in principle crossing the FS
+		self.band_list=[]
+		for band in range(self.nbands):
+			emax=np.max(self.ene[:,band])
+			emin=np.min(self.ene[:,band])
+			if self.fermi >= emin and self.fermi <= emax :
+				self.band_list.append(band)
+		self.band_list = np.array(self.band_list)
+
+		if self.comm.rank == 0:
+			if self.debug:
+				print("Cell vectors:")
+				print(self.cell)
+				print
+				print("Atoms: ",self.natoms)
+				print
+				print('dr',self.dr, flush = True)
+				print("\nReciprocal vectors:")
+				print(calc.rec_basis)
+				#print(2*pi/self.cell[0][0])
+				print('dk',self.dk, flush = True)
+				print("Found",self.band_list.shape[0],"bands crossing FS")
+				print
+
+
+		##########################################################################################################################
 		if self.comm.rank == 0:
 			# mapping for k-points from IBZ to FBZ
+			print("\n* Reading k-points mapping from OUTCAR", flush = True)
 			i2f = ibz2fbz("OUTCAR")
 		else:
 			i2f = None
-
+		#scatter i2f
 		i2f = self.comm.bcast(i2f, root = 0)
 
 		self.nibz2fbz = i2f.nitpi2f
@@ -117,55 +162,9 @@ class Lifetime(object):
 
 		if self.comm.rank == 0:
 			if self.debug:
-				print("Cell vectors:")
-				print(self.cell)
 				print("Number of k-points in full IBZ interploated:",self.inkpt)
 				print("Number of k-points in full BZ interpolated:",self.nkpt)
-				print
-
-		#if self.comm.rank == 0:
-		#	if self.debug:
-		#		print(self.nibz2fbz.shape[0]," noniterpolated IBZ - FBZ k-point mappings", flush = True)
-		#		print(self.ibz2fbz.shape[0]," iterpolated IBZ - FBZ k-point mappings", flush = True)
-		#		print
-
-		# for cubic cell
-		self.dr = np.array([0,0,0],dtype='float64')
-		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] # in Ang
-
-		if self.debug:
-			if self.comm.rank == 0:
-				print('dr',self.dr, flush = True)
-
-		# step of K-mesh in reciprocal space
-		self.dk = np.array([0,0,0],dtype='float')
-		for i in range(3): self.dk[i] = 2.0 * pi  / self.kgrid[i]  # unitless
-		if self.debug:
-			if self.comm.rank == 0: print('dk',self.dk, flush = True)
-
-		if self.comm.rank == 0:
-			# cached value of scattering probability matrix (squared elements)
-			self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
-			#if (self.restart):
-			if os.path.isfile(self.T2file) :
-				data = sps.load_npz(self.T2file)
-				self.T2 = data.todok()
-		else:
-			self.T2 = None
-		self.T2 = self.comm.bcast(self.T2, root = 0)
-		
-		# search for bands which are in principle crossing the FS
-		self.band_list=[]
-		for band in range(self.nbands):
-			emax=np.max(self.ene[:,band])
-			emin=np.min(self.ene[:,band])
-			if self.fermi >= emin and self.fermi <= emax :
-				self.band_list.append(band)
-		self.band_list = np.array(self.band_list)
-		if self.comm.rank == 0:
-			if self.debug:
-				print("Found",self.band_list.shape[0],"bands crossing FS")
-				print
+				print("\nSorting out k-points with partially occupied band levels:")
 
 		# sorting out kpts we don't need
 		# require fix for spin decoupling
@@ -181,15 +180,36 @@ class Lifetime(object):
 					print('Adding k point #',kpt, flush=True)
 				self.kptlist.append(kpt)
 		self.kptlist=np.array(self.kptlist)
+		
+		if self.comm.rank == 0:
+			if self.debug:
+				print("Added",len(self.kptlist),"points from",self.inkpt)
 
+
+
+		##########################################################################################################################
+		if self.comm.rank == 0:
+			# cached value of scattering probability matrix (squared elements)
+			self.T2 = sps.dok_matrix((self.inkpt*self.nbands,self.inkpt*self.nbands), dtype=np.float64)
+			#if (self.restart):
+			if os.path.isfile(self.T2file) :
+				if self.comm.rank == 0: print("\n* Reading scattering coefficients from",self.T2file,flush = True)
+				data = sps.load_npz(self.T2file)
+				self.T2 = data.todok()
+				if self.comm.rank == 0: print("scattering coefficients readed.",flush = True)
+		else:
+			self.T2 = None
+		self.T2 = self.comm.bcast(self.T2, root = 0)
+
+		##########################################################################################################################
 		#reading wavefunction
 		if self.comm.rank == 0:
 			if self.debug :
-				print('\nReading wave-function coefficients from WAVECAR.', flush = True)
+				print('\n* Reading wave-function coefficients from WAVECAR.', flush = True)
 				print
 		self.wavecoef()
 		
-
+		##########################################################################################################################
 
 	def wavecoef(self):
 		#   constant 'c' below is 2m/hbar**2 in units of 1/eV Ang^2 (value is
@@ -513,14 +533,28 @@ class Lifetime(object):
 	def dFdE(self,k,n):
 		# derivative of Fermi distribution
 		sigma = self.sigma
-		x = self.ene[k][n] - self.fermi
-		return -1.0/(pow(2*pi,0.5) * sigma) * np.exp(-x*x/(2*sigma*sigma))
+		de = self.ene[k][n] - self.fermi
+		#return -1.0/(pow(2*pi,0.5) * sigma) * np.exp(-de*de/(2*sigma*sigma))
+		return -1.0/sigma * np.exp(de/sigma) / (np.exp(de/sigma) + 1.0)**2.0
+
+	def saveT2(self):
+		#save new T
+		if self.comm.rank == 0:
+			#mv old file
+			if os.path.isfile(self.T2file) :
+				os.rename(self.T2file, self.T2file+".0")
+			
+			# convert matrix to save format
+			data_save = sps.csc_matrix(self.T2)
+			
+			#save matrix
+			sps.save_npz(self.T2file, data_save)
+			#pass
+
 
 
 	def R(self,kf,nf):
 		"Get inverse lifetime for state n, k"
-		# defect dencity per cubic Angstr
-		nd = 1.0 # per atom, actuall will be 1e-20 or so
 		ikf = kf # we already supply only indeces from IBZ
 
 		hbar = 4.135667662e-15 # eV*s
@@ -546,10 +580,7 @@ class Lifetime(object):
 				ef = self.ene[ikf][nf] 
 				
 				if abs(ei - ef) > self.sigma*self.ds: 
-					#print("+",ei,ef,abs(ei - ef),self.sigma*self.ds,self.occ[iki][ni],self.occ[ikf][nf])
 					continue
-				#else:
-				#	print("-",ei,ef,abs(ei - ef),self.sigma*self.ds,self.occ[iki][ni],self.occ[ikf][nf])
 
 				# 6 check if we have cached value for calculated T element
 				init = iki*self.nbands + ni
@@ -569,11 +600,6 @@ class Lifetime(object):
 						print('\tT(', iki, ni, '=>', ikf, nf, ') =',sqrt(self.T2[init,final])*1000.0,'meV REUSE', flush=True)
 				T2 = self.T2[init,final]
 				
-				#save new T
-				if self.comm.rank == 0:
-					#data_save = sps.csc_matrix(self.T2)
-					#sps.save_npz(self.T2file, matrix)
-					pass
 
 				# sum over all reflections of reduced K-point
 				kpts = np.where(self.ibz2fbz == iki)[0]
@@ -600,29 +626,21 @@ class Lifetime(object):
 		
 		#print("Preaparing to exit R",self.comm.rank,nf,kf)
 		if self.comm.rank == 0:
-			R = nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # m-3 / eVs * (eV)^2 = eV/m3s
+			R = self.nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			#R = 1.0  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
 			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
+			# save updatet T matrix here ##################################################################################################
+			self.saveT2()
 		else:
 			pass
-		
-		#print("Now try to exit R",self.comm.rank,nf,kf, flush = True)
 
 		return R
 
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
-		dk = self.dk # unitless, 0..2pi
+		dk = self.dk # unitless, 0..2pi/N
 
-		# carrier concentration per cubic cm, +3 electrons of defected Al atom
-		# per cubic cm
-		ncarr = (self.nelect + 3) #/ LA.det(self.cell * 1e-10)
-		# ncarr = 18.1e22 # el per cubic cm
-		#ncarr = 3 # per atom
-
-		# electron charge, since we work in eV units
-		#e = -1.6e-19 # coulomb
-		e = 1.0 # in electrons
 		mob = 0.0
 
 		for nf in self.band_list:
@@ -660,7 +678,7 @@ class Lifetime(object):
 
 		
 		if self.comm.rank == 0:
-			return (-2.0 * e / ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # e  * (m2/eVs) =  m2/Vs
+			return (-2.0 * self.e / self.ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
 
 		return 0
 
@@ -669,15 +687,16 @@ def main(nf = 0, kf = 0):
 	comm = MPI.COMM_WORLD
 	rank = comm.Get_rank()
 
+	if len(sys.argv) > 1: 
+		scale =  int(sys.argv[1])
+		if rank == 0 : print("Reading scale factor for local potential 1 /", scale, flush = True)
+
 	t0 = time.time()
 	debug = True
 	restart = False
-	lt = Lifetime(debug,restart)
+	lt = Lifetime(debug,restart,scale)
 	t1 = time.time()
 
-	if len(sys.argv) > 1: 
-		lt.scale =  int(sys.argv[1])
-		if lt.comm.rank == 0 : print("Reading scale factor for local potential 1 /", lt.scale, flush = True)
 	if len(sys.argv) > 2: 
 		lt.ds =  int(sys.argv[2])
 		if lt.comm.rank == 0 : print("Reading energy distanse", lt.ds, "of Fermi smearing.", flush = True)
@@ -689,7 +708,8 @@ def main(nf = 0, kf = 0):
 	mob = lt.mobility()
 
 	if lt.comm.rank == 0:
-		print("Mobility:",mob*1e-4,' cm2/Vs')
+		print("Mobility:",mob/1e4,' cm2/Vs')
+		print("Resistivity for 18.1*10^22 el/cm3 is:",3.45e-3 / mob,"e-8 Omh.m") #1e8/(18.1e28 * 1.6e-19 * mob)
 		t2 = time.time()
 		print("Real space reduction ",lt.scale,'- fold')
 		if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0)," Ncores:",lt.comm.size, flush = True)
