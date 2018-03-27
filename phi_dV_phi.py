@@ -114,13 +114,13 @@ class Lifetime(object):
 		#for i in range(3): self.dk[i] = 2 * pi / (self.kgrid[i] + 0.0) # unitless!!!!
 
 		# search for bands which are in principle crossing the FS
-		self.band_list=[]
+		self.bandlist=[]
 		for band in range(self.nbands):
 			emax=np.max(self.ene[:,band])
 			emin=np.min(self.ene[:,band])
 			if self.fermi >= emin and self.fermi <= emax :
-				self.band_list.append(band)
-		self.band_list = np.array(self.band_list)
+				self.bandlist.append(band)
+		self.bandlist = np.array(self.bandlist)
 
 		if self.comm.rank == 0:
 			if self.debug:
@@ -132,9 +132,9 @@ class Lifetime(object):
 				print('dr',self.dr, flush = True)
 				print("\nReciprocal vectors:")
 				print(calc.rec_basis)
-				#print(2*pi/self.cell[0][0])
-				print('dk',self.dk, flush = True)
-				print("Found",self.band_list.shape[0],"bands crossing FS")
+				#print('dk',self.dk, flush = True)
+				print("Found",self.bandlist.shape[0],"bands crossing FS")
+				print(self.bandlist)
 				print
 
 
@@ -171,9 +171,9 @@ class Lifetime(object):
 		self.kptlist = []
 		for kpt in range(self.inkpt):
 			flag = 0
-			for n in self.band_list:
-				if (self.occ[kpt][n] == 0.0 or self.occ[kpt][n] == 1.0) : continue
-				#if self.dFdE(kpt,n) == 0: continue
+			for n in self.bandlist:
+				#if (self.occ[kpt][n] == 0.0 or self.occ[kpt][n] == 1.0) : continue
+				if (self.occ[kpt][n] <= 0.01 or self.occ[kpt][n] >= 0.99) : continue
 				flag = 1
 			if flag:
 				if self.comm.rank == 0:
@@ -326,11 +326,12 @@ class Lifetime(object):
 			print('estimated max. no. plane waves =',npmax, flush = True)
 
 		nkpt = self.kptlist.shape[0]
+		cband = self.bandlist.shape[0] # bands Crossing FS
 
 		################### create the output structure ########################################
 		
 		if self.comm.rank == 0:
-			self.wf = Lifetime.wf(nspin,nkpt,npmax,nband)
+			self.wf = Lifetime.wf(nspin,nkpt,npmax,cband)
 			self.wf.Vcell = Vcell
 
 		################## read structures: spin, kpt on each thread ###########################
@@ -360,11 +361,12 @@ class Lifetime(object):
 				if self.comm.rank == 0:
 					self.wf.nplane[spin][ik]=int(dummy[0])
 					self.wf.kpt[spin][ik] = np.array(dummy[1:4])
-				for i in range(nband):
-					pass
+
+				for i in range(cband):
 					if self.comm.rank == 0:
-						self.wf.cener[spin][ik][i] = dummy[5+2*i] + 1j * dummy[5+2*i+1]
-						self.wf.occ[spin][ik][i] = dummy[5+2*nband+i]
+						iband = self.bandlist[i]
+						self.wf.cener[spin][ik][i] = dummy[5+2*iband] + 1j * dummy[5+2*iband+1]
+						self.wf.occ[spin][ik][i] = dummy[5+2*nband+iband]
 
 				if self.debug and self.comm.rank==0 :
 					print('k point #',ikid,'  input no. of plane waves =', self.wf.nplane[spin][ik], 'k value =', self.wf.kpt[spin][ik], flush=True)
@@ -405,7 +407,7 @@ class Lifetime(object):
 						sys.exit('*** error - computed no. '+str(ncnt)+' != input no.'+str(self.wf.nplane[spin][ik]))
 
 				######### read planewave coefficients for each energy band at given K-point ####################
-				rank_k_coeff = np.zeros([nband,npmax],dtype='complex64')
+				rank_k_coeff = np.zeros([cband,npmax],dtype='complex64')
 
 				if self.comm.rank == 0:
 					npl = self.wf.nplane[spin][ik]
@@ -414,18 +416,21 @@ class Lifetime(object):
 				npl = self.comm.bcast(npl,root=0)
 
 				# read coeffs in parallel
-				for iband in range(self.comm.rank, nband, self.comm.size):
+				
+				#for iband in range(self.comm.rank, nband, self.comm.size):
+				for i in range(self.comm.rank, cband, self.comm.size):
+					iband = self.bandlist[i]
 					recpos = (2 + ikid*(nband+1) + spin*nkpt*(nband+1) + (iband+1) ) * recl
 					f.seek(recpos)
 					buffer = f.read(recl)
 					fmt=str(int(8*npl/4))+'f'
 					(dummy) = struct.unpack(fmt,buffer[:int(8*npl)])
 					for iplane in range(npl):
-						rank_k_coeff[iband][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
+						rank_k_coeff[i][iplane] = dummy[2*iplane] + 1j * dummy[2*iplane+1]
 				
 				# collect coeffs from slave nodes to the root node
 				if self.comm.rank == 0:
-					k_coeff = np.zeros([nband,npmax],dtype='complex64')
+					k_coeff = np.zeros([cband,npmax],dtype='complex64')
 				else:
 					k_coeff = None
 				self.comm.Reduce(rank_k_coeff,  k_coeff,  op=MPI.SUM, root = 0)
@@ -455,14 +460,16 @@ class Lifetime(object):
 
 		spin = 0 #non spin-polarized
 
-		# >0 i.e. on all nodes
+		#find array number form band number
+		bi = np.where(self.bandlist == ni)[0]
+		bf = np.where(self.bandlist == nf)[0]
 		
 		if self.comm.rank == 0:
 			idki = np.where(self.wf.ids[spin] == ki)[0][0]
 			kpt = self.wf.kpt[spin][idki]
 			igall = self.wf.igall[spin][idki]
 			nplane = self.wf.nplane[spin][idki]
-			coeff = np.asarray(self.wf.coeff[spin][idki][ni],dtype=np.complex128)
+			coeff = np.asarray(self.wf.coeff[spin][idki][bi],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
@@ -486,7 +493,7 @@ class Lifetime(object):
 			kpt = self.wf.kpt[spin][idkf]
 			igall = self.wf.igall[spin][idkf]
 			nplane = self.wf.nplane[spin][idkf]
-			coeff = np.asarray(self.wf.coeff[spin][idkf][nf],dtype=np.complex128)
+			coeff = np.asarray(self.wf.coeff[spin][idkf][bf],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
@@ -561,10 +568,10 @@ class Lifetime(object):
 
 		# initial value for scattering rate for kf nf
 		R = 0.0
-		dk = self.dk # unitless 0..2pi
+		#dk = self.dk # unitless 0..2pi
 
 		# loop over all initial energy levels
-		for ni in self.band_list:
+		for ni in self.bandlist:
 
 			# scatering coefficient for n-th k-point
 			R_n = 0.0
@@ -626,8 +633,8 @@ class Lifetime(object):
 		
 		#print("Preaparing to exit R",self.comm.rank,nf,kf)
 		if self.comm.rank == 0:
-			R = self.nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
-			#R = 1.0  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			#R = self.nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			R = self.nd  * (2.0 * pi/hbar * R ) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
 			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
 			# save updatet T matrix here ##################################################################################################
 			self.saveT2()
@@ -639,15 +646,14 @@ class Lifetime(object):
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
-		dk = self.dk # unitless, 0..2pi/N
+		#dk = self.dk # unitless, 0..2pi/N
 
 		mob = 0.0
 
-		for nf in self.band_list:
+		for nf in self.bandlist:
 			# loop over all k-points
 			for ikf in self.kptlist:
 
-				
 				# 2 get FBZ - IBZ number correspondance
 				#ikf = self.ibz2fbz[kf]
 
@@ -678,7 +684,8 @@ class Lifetime(object):
 
 		
 		if self.comm.rank == 0:
-			return (-2.0 * self.e / self.ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+			#return (-2.0 * self.e / self.ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+			return (-2.0 * self.e / self.ncarr) * mob  # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
 
 		return 0
 
