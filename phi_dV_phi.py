@@ -37,8 +37,10 @@ class Lifetime(object):
 			self.nplane = np.zeros([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
 			self.nband = nband
+			
 
-	def __init__(self, debug = True, restart = True, scale = 1):
+	def __init__(self, debug = True, restart = True, scale = 1, nd = 1):
+		self.nd = nd
 		self.comm = MPI.COMM_WORLD
 		self.debug = debug
 		self.restart = restart
@@ -47,7 +49,7 @@ class Lifetime(object):
 		self.T2file = "data_sparse."+str(self.scale)+".npz"
 
 		#default distance between erergy of points in parts of fermi smearing
-		self.ds = 1
+		self.ds = 20
 
 
 		# electron charge, since we work in eV units
@@ -66,6 +68,8 @@ class Lifetime(object):
 			self.charge = None
 		#scatter CHGCAR
 		self.charge = self.comm.bcast(self.charge, root = 0)
+
+
 
 		# number of points in CHGCAR gives points for integral in RS
 		self.r = np.array(self.charge.shape, dtype='int_')
@@ -89,11 +93,7 @@ class Lifetime(object):
 		self.sigma = calc.sigma
 		self.fermi = calc.efermi_interpolated
 		self.nelect = calc.nelect
-		self.natoms = calc.natoms
-
-		# defect dencity per atomic site
-		self.nd = 1./(self.natoms + 1.) # 1 per cell, +1 since vacancy
-
+		self.natoms = calc.natoms #+ self.nd since now we read undistorted lattice
 
 		# parameters for K-points in full BZ (formally interpolated, but with scaling factor 1)
 		self.nkpt = calc.nkpts
@@ -106,7 +106,7 @@ class Lifetime(object):
 
 		# for ortho cell
 		self.dr = np.array([0,0,0],dtype='float64')
-		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] # in Ang, r - number points of LOCPOT grid
+		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] * self.scale # in Ang, r - number points of LOCPOT grid
 
 		# step of K-mesh in reciprocal space
 		self.dk = np.array([0,0,0],dtype='float')
@@ -132,9 +132,9 @@ class Lifetime(object):
 				print('dr',self.dr, flush = True)
 				print("\nReciprocal vectors:")
 				print(calc.rec_basis)
-				#print('dk',self.dk, flush = True)
+				print('dk',self.dk, flush = True)
 				print("Found",self.bandlist.shape[0],"bands crossing FS")
-				print(self.bandlist)
+				#print(self.bandlist)
 				print
 
 
@@ -469,7 +469,8 @@ class Lifetime(object):
 			kpt = self.wf.kpt[spin][idki]
 			igall = self.wf.igall[spin][idki]
 			nplane = self.wf.nplane[spin][idki]
-			coeff = np.asarray(self.wf.coeff[spin][idki][bi],dtype=np.complex128)
+			# [0,:] since otherwise it returns as 2d array
+			coeff = np.asarray(self.wf.coeff[spin][idki][bi][0,:],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
@@ -493,7 +494,8 @@ class Lifetime(object):
 			kpt = self.wf.kpt[spin][idkf]
 			igall = self.wf.igall[spin][idkf]
 			nplane = self.wf.nplane[spin][idkf]
-			coeff = np.asarray(self.wf.coeff[spin][idkf][bf],dtype=np.complex128)
+			# [0,:] since otherwise it returns as 2d array
+			coeff = np.asarray(self.wf.coeff[spin][idkf][bf][0,:],dtype=np.complex128)
 			Vcell = self.wf.Vcell
 
 		else:
@@ -522,10 +524,12 @@ class Lifetime(object):
 
 		T = self.comm.allreduce(Trank,op=MPI.SUM)
 
-		T  *= self.dr[0] * self.dr[1] * self.dr[2] * pow(s,3) 
-		
+		#uncomment with resolved plug
+		T  *= self.dr[0] * self.dr[1] * self.dr[2] #* pow(s,3) #moved to definiton of dr
+
 		if self.comm.rank==0:
 			print('\t<{},{}|V|{},{}> = {:e} '.format(kf,nf,ki,ni,abs(T)))
+			#print('dr/vc',self.dr[0] * self.dr[1] * self.dr[2] * rs[0] * rs[1] * rs[2] / Vcell)
 		return T
 
 
@@ -538,11 +542,11 @@ class Lifetime(object):
 
 
 	def dFdE(self,k,n):
-		# derivative of Fermi distribution
-		sigma = self.sigma
-		de = self.ene[k][n] - self.fermi
-		#return -1.0/(pow(2*pi,0.5) * sigma) * np.exp(-de*de/(2*sigma*sigma))
-		return -1.0/sigma * np.exp(de/sigma) / (np.exp(de/sigma) + 1.0)**2.0
+		# derivative of Fermi distribution 
+		sigma = self.sigma #kT in energy units
+		de = self.ene[k][n] - self.fermi #in energy units
+		# sigma=kT , 1ev = 1.602e-19 J
+		return -1.0/(sigma * 1.602e-19) * np.exp(de/sigma) / (np.exp(de/sigma) + 1.0)**2.0
 
 	def saveT2(self):
 		#save new T
@@ -568,7 +572,7 @@ class Lifetime(object):
 
 		# initial value for scattering rate for kf nf
 		R = 0.0
-		#dk = self.dk # unitless 0..2pi
+		dk = self.dk # unitless 0..2pi
 
 		# loop over all initial energy levels
 		for ni in self.bandlist:
@@ -604,13 +608,13 @@ class Lifetime(object):
 						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
 				else:
 					if self.comm.rank==0:
-						print('\tT(', iki, ni, '=>', ikf, nf, ') =',sqrt(self.T2[init,final])*1000.0,'meV REUSE', flush=True)
+						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s REUSE', flush=True)
 				T2 = self.T2[init,final]
 				
 
 				# sum over all reflections of reduced K-point
 				kpts = np.where(self.ibz2fbz == iki)[0]
-				if self.comm.rank==0: print("\tAdding",kpts.shape[0],"kpt reflections")
+				if self.comm.rank==0: print("\tAdding",kpts.shape[0],"kpti reflections")
 				for ki in kpts:
 
 					# 4 get FBZ - interpolated FBZ number correspondence for group velocity
@@ -633,8 +637,8 @@ class Lifetime(object):
 		
 		#print("Preaparing to exit R",self.comm.rank,nf,kf)
 		if self.comm.rank == 0:
-			#R = self.nd  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
-			R = self.nd  * (2.0 * pi/hbar * R ) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			R = (self.natoms / self.nd)  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			#R = self.nd * (2.0 * pi/hbar * R ) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
 			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
 			# save updatet T matrix here ##################################################################################################
 			self.saveT2()
@@ -646,7 +650,7 @@ class Lifetime(object):
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
-		#dk = self.dk # unitless, 0..2pi/N
+		dk = self.dk # unitless, 0..2pi/N
 
 		mob = 0.0
 
@@ -671,7 +675,11 @@ class Lifetime(object):
 				else: tau = 1.0 / R_nk
 
 				# sum over all reflections of reduced K-point
-				for kf in np.where(self.ibz2fbz == ikf)[0]:
+
+				kpts = np.where(self.ibz2fbz == ikf)[0]
+				if self.comm.rank==0: print("\tAdding",kpts.shape[0],"kptf reflections")
+				for kf in kpts:
+					#for kf in np.where(self.ibz2fbz == ikf)[0]:
 					vel = self.vel[kf][nf]
 					# velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 					# projection of group velocity on field direction
@@ -684,8 +692,9 @@ class Lifetime(object):
 
 		
 		if self.comm.rank == 0:
-			#return (-2.0 * self.e / self.ncarr) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
-			return (-2.0 * self.e / self.ncarr) * mob  # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+			return (-2.0 * self.e / self.nelect) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+			#return (-2.0 * self.e / self.ncarr) * mob  # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+			#return (-2.0 * self.e / self.nelect) * mob  # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
 
 		return 0
 
@@ -698,15 +707,22 @@ def main(nf = 0, kf = 0):
 		scale =  int(sys.argv[1])
 		if rank == 0 : print("Reading scale factor for local potential 1 /", scale, flush = True)
 
+	if len(sys.argv) > 2: 
+		nd =  int(sys.argv[2])
+		if rank == 0 : print("Reading number of defects in the system", nd, flush = True)
+
+
 	t0 = time.time()
 	debug = True
 	restart = False
-	lt = Lifetime(debug,restart,scale)
+	lt = Lifetime(debug,restart,scale,nd)
 	t1 = time.time()
 
-	if len(sys.argv) > 2: 
-		lt.ds =  int(sys.argv[2])
+	if len(sys.argv) > 3: 
+		lt.ds =  int(sys.argv[3])
 		if lt.comm.rank == 0 : print("Reading energy distanse", lt.ds, "of Fermi smearing.", flush = True)
+
+
 
 	if lt.comm.rank == 0:
 		print("Data readed in",int(t1-t0),'s.')
@@ -715,8 +731,13 @@ def main(nf = 0, kf = 0):
 	mob = lt.mobility()
 
 	if lt.comm.rank == 0:
-		print("Mobility:",mob/1e4,' cm2/Vs')
-		print("Resistivity for 18.1*10^22 el/cm3 is:",3.45e-3 / mob,"e-8 Omh.m") #1e8/(18.1e28 * 1.6e-19 * mob)
+
+		ncarr = 1.8e28 #el/m3
+		ndef = 1e16  # N/m3 at 300K, formation en 0.7 eV
+		q = 1.6e-19
+
+		print("Mobility of 1 electron over 1 defect :",mob * 1e-4,' cm2/Vs') # convert from m2 to cm2
+		print("Resistivity for ",ncarr,"el/cm3 and ",ndef,"defects/cm3 is:", ndef / (ncarr * q * mob)," Omh.m")
 		t2 = time.time()
 		print("Real space reduction ",lt.scale,'- fold')
 		if lt.debug: print("Data calculation",int(t2-t1),'s, total time',int(t2-t0)," Ncores:",lt.comm.size, flush = True)
