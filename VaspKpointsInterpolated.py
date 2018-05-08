@@ -48,6 +48,7 @@ class VaspKpointsInterpolated:
              'kptgrid_divisions',
              'ispin',
              'nelect',
+             'natoms',
              'kinter',
              'efermi_interpolated',
              'dos',
@@ -80,6 +81,7 @@ class VaspKpointsInterpolated:
         self.kptgrid_divisions = None
         self.ispin = None
         self.nelect = None
+        self.natoms = None
         self.kinter = None
         self.dos = None
         self.efermi_interpolated = None
@@ -169,6 +171,11 @@ class VaspKpointsInterpolated:
         # 3) extract some parameters
         #if self.comm.rank == 0: 
         print("extracting some parameters")
+
+        for element in xmldoc.findall("atominfo/atoms"):
+            self.natoms = int(element.text)
+        print("ATOMS = ",self.natoms)
+
         for element in xmldoc.findall("parameters/*/i"):
             if not 'name' in element.attrib:
                 continue
@@ -315,6 +322,7 @@ class VaspKpointsInterpolated:
             if 'kpoint' in element.attrib['comment']:
                 en = []
                 vel = []
+                #print('kpt readed',len(element),'energy levels')
                 for v in list(element):
                     en.append(float(v.text.split()[0]))
                     vel.append([float(x) for x in v.text.split()[1:]])
