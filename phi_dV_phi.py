@@ -10,7 +10,7 @@ from numpy.lib import pad
 from scipy.linalg import *
 from scipy.constants import *
 from scipy import sparse as sps
-#from sympy import DiracDelta
+import scipy.fftpack as fft
 from math import sin,cos,asin,acos,sqrt
 
 #import mpi4py
@@ -37,7 +37,6 @@ class Lifetime(object):
 			self.nplane = np.zeros([nspin,nkpt],dtype='int_')
 			self.Vcell = 0
 			self.nband = nband
-			
 
 	def __init__(self, debug = True, restart = True, scale = 1, nd = 1):
 		self.nd = nd
@@ -48,10 +47,6 @@ class Lifetime(object):
 		self.scale = scale
 		self.T2file = "data_sparse."+str(self.scale)+".npz"
 
-		#default distance between erergy of points in parts of fermi smearing
-		self.ds = 20
-
-
 		# electron charge, since we work in eV units
 		#e = -1.6e-19 # coulomb
 		self.e = 1.0 # in electrons
@@ -61,18 +56,19 @@ class Lifetime(object):
 
 		##########################################################################################################################
 		if self.comm.rank == 0:
-			if self.debug : print('* Reading charge perturbation from CHGCAR difference.', flush = True)
-			self.CHGCAR = VaspChargeDensity("CHGCAR_diff")
-			self.charge = self.CHGCAR.chg[0]
+			if self.debug : print('* Reading potential perturbation from LOCPOT difference.', flush = True)
+			self.CHGCAR = VaspChargeDensity("LOCPOT_diff")
+			self.dV = self.CHGCAR.chg[0]
+			# to be multiplied by the Vcell, since VaspChargeDensity normalize charge by Vcell
 		else:
-			self.charge = None
+			self.dV = None
 		#scatter CHGCAR
-		self.charge = self.comm.bcast(self.charge, root = 0)
+		self.dV = self.comm.bcast(self.dV, root = 0)
 
 
 
-		# number of points in CHGCAR gives points for integral in RS
-		self.r = np.array(self.charge.shape, dtype='int_')
+		# number of points in LOCPOT gives points for integral in RS
+		self.r = np.array(self.dV.shape, dtype='int_')
 
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
@@ -106,7 +102,7 @@ class Lifetime(object):
 
 		# for ortho cell
 		self.dr = np.array([0,0,0],dtype='float64')
-		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] * self.scale # in Ang, r - number points of LOCPOT grid
+		for i in range(3): self.dr[i] = (self.cell[i][i]) / self.r[i] #* self.scale # in Ang, r - number points of LOCPOT grid
 
 		# step of K-mesh in reciprocal space
 		self.dk = np.array([0,0,0],dtype='float')
@@ -126,6 +122,7 @@ class Lifetime(object):
 			if self.debug:
 				print("Cell vectors:")
 				print(self.cell)
+				print("Volume",LA.det(self.cell))
 				print
 				print("Atoms: ",self.natoms)
 				print
@@ -209,6 +206,12 @@ class Lifetime(object):
 				print
 		self.wavecoef()
 		
+		# dV multiplied by the Vcell, since VaspChargeDensity normalize charge by Vcell
+		self.dV *= LA.det(self.cell)
+		
+
+
+
 		##########################################################################################################################
 
 	def wavecoef(self):
@@ -444,19 +447,31 @@ class Lifetime(object):
 
 		return
 
+
+	def interpolate_fft(self,arr, scale=1):
+		shape = np.shape(arr)
+		pad_width = tuple( ( int(np.ceil(a/2*(scale-1))), int(np.floor(a/2*(scale-1))) ) for a in shape)
+		#print(pad_width)
+		padded = np.pad( fft.fftshift( fft.fftn(arr) ), pad_width, mode='constant')
+		return fft.ifftn(  scale**len(arr.shape)*fft.ifftshift(padded) )
+
 	def T(self, ki, ni, kf, nf):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
+		T1 = 0.0
 		Trank = 0.0
 		Ti = 0.0
 		Tf = 0.0
-		s = self.scale #scale of the charge array
+		s = self.scale #scale of the local potential array
+		r = self.r
 
-		rs = np.array([int(self.r[0]/s),int(self.r[1]/s),int(self.r[2]/s)],dtype='int_') #number of points in space
+		rs = np.array([int(r[0]/s),int(r[1]/s),int(r[2]/s)],dtype='int_') #number of points in space
 
 		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
 		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
+		phi_i_itp = np.zeros((r[0],r[1],r[2]),dtype='complex128')
+		phi_f_itp = np.zeros((r[0],r[1],r[2]),dtype='complex128')
 
 		spin = 0 #non spin-polarized
 
@@ -487,7 +502,7 @@ class Lifetime(object):
 		coeff = self.comm.bcast(coeff, root = 0)
 		Vcell = self.comm.bcast(Vcell, root = 0)
 
-		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_i)
+		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs,  phi_i)
 
 		if self.comm.rank == 0:
 			idkf = np.where(self.wf.ids[spin] == kf)[0][0]
@@ -514,22 +529,23 @@ class Lifetime(object):
 
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs, phi_f)
 
-		# x y z - indeces of points in the charge array
-		for idx in range(self.comm.rank, int(rs[0]*rs[1]*rs[2]), self.comm.size):
+		phi_i_itp = self.interpolate_fft(phi_i,s)
+		phi_f_itp = self.interpolate_fft(phi_f,s)
+
+		# x y z - indeces of points in the local potential array
+		#interpolated
+		Trank = 0.0
+		for idx in range(self.comm.rank, int(r[0]*r[1]*r[2]), self.comm.size):
 			# convert common index to dimention indexes
-			z = int(  idx / (rs[1]*rs[2])           )
-			y = int( (idx - z *rs[1]*rs[2]) / rs[0] )
-			x = int( (idx - z *rs[1]*rs[2]) % rs[0] )
-			Trank += np.conj( phi_f[x][y][z] ) * self.charge[x*s][y*s][z*s] * phi_i[x][y][z]
-
+			z = int(  idx / (r[1]*r[2])           )
+			y = int( (idx - z *r[1]*r[2]) / r[0] )
+			x = int( (idx - z *r[1]*r[2]) % r[0] )
+			Trank += np.conj( phi_f_itp[x][y][z] ) * self.dV[x][y][z] * phi_i_itp[x][y][z]
 		T = self.comm.allreduce(Trank,op=MPI.SUM)
-
-		#uncomment with resolved plug
-		T  *= self.dr[0] * self.dr[1] * self.dr[2] #* pow(s,3) #moved to definiton of dr
+		T  *= self.dr[0] * self.dr[1] * self.dr[2]
 
 		if self.comm.rank==0:
-			print('\t<{},{}|V|{},{}> = {:e} '.format(kf,nf,ki,ni,abs(T)))
-			#print('dr/vc',self.dr[0] * self.dr[1] * self.dr[2] * rs[0] * rs[1] * rs[2] / Vcell)
+			print('\t<{},{}|V|{},{}> = {:e}'.format(kf,nf,ki,ni,abs(T)))
 		return T
 
 
@@ -590,8 +606,8 @@ class Lifetime(object):
 				ei = self.ene[iki][ni]
 				ef = self.ene[ikf][nf] 
 				
-				if abs(ei - ef) > self.sigma*self.ds: 
-					continue
+				#if abs(ei - ef) > self.sigma*self.ds: 
+				#	continue
 
 				# 6 check if we have cached value for calculated T element
 				init = iki*self.nbands + ni
@@ -605,10 +621,10 @@ class Lifetime(object):
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(iki,ni,ikf,nf) ),2.0)
 					t1 = time.time()
 					if self.comm.rank==0:
-						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
+						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final]),'eV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int((t1-t0)*100.0)/100.0,'s', flush=True)
 				else:
 					if self.comm.rank==0:
-						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final])*1000.0,'meV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s REUSE', flush=True)
+						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final]),'eV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s REUSE', flush=True)
 				T2 = self.T2[init,final]
 				
 
@@ -677,7 +693,7 @@ class Lifetime(object):
 				# sum over all reflections of reduced K-point
 
 				kpts = np.where(self.ibz2fbz == ikf)[0]
-				if self.comm.rank==0: print("\tAdding",kpts.shape[0],"kptf reflections")
+				if self.comm.rank==0: print("Adding",kpts.shape[0],"kptf reflections")
 				for kf in kpts:
 					#for kf in np.where(self.ibz2fbz == ikf)[0]:
 					vel = self.vel[kf][nf]
@@ -717,11 +733,6 @@ def main(nf = 0, kf = 0):
 	restart = False
 	lt = Lifetime(debug,restart,scale,nd)
 	t1 = time.time()
-
-	if len(sys.argv) > 3: 
-		lt.ds =  int(sys.argv[3])
-		if lt.comm.rank == 0 : print("Reading energy distanse", lt.ds, "of Fermi smearing.", flush = True)
-
 
 
 	if lt.comm.rank == 0:
