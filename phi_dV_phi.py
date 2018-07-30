@@ -17,6 +17,7 @@ from math import sin,cos,asin,acos,sqrt
 #mpi4py.rc.recv_mprobe = False
 from mpi4py import MPI
 
+import pickle
 import phi
 
 from getsize import get_size
@@ -51,6 +52,7 @@ class Lifetime(object):
 		# real space calculation reduction, calculate only every scale-th point
 		self.scale = scale
 		self.T2file = "data_sparse."+str(self.scale)+".npz"
+		self.WFfile = "WF_unwrap."+str(self.scale)+".npy"
 
 		# electron charge, since we work in eV units
 		#e = -1.6e-19 # coulomb
@@ -62,8 +64,11 @@ class Lifetime(object):
 		##########################################################################################################################
 		if self.comm.rank == self.MASTER:
 			if self.debug : print('* Reading potential perturbation from LOCPOT difference.', flush = True)
+			t = -time.time()
 			self.CHGCAR = VaspChargeDensity("LOCPOT_diff")
 			self.dV = self.CHGCAR.chg[0]
+			t += time.time()
+			print('Done in ',t,'s.', flush = True)
 			# to be multiplied by the Vcell, since VaspChargeDensity normalize charge by Vcell
 		else:
 			self.dV = None
@@ -83,8 +88,11 @@ class Lifetime(object):
 		##########################################################################################################################
 
 		if self.comm.rank == self.MASTER:
+			t = -time.time()
 			if self.debug : print('\n* Reading simulation configuration and group velocities from vasprun.xml', flush = True)
 			calc = VaspKpointsInterpolated("vasprun.xml")
+			t += time.time()
+			print('Done in ',t,'s.', flush = True)
 		else:
 			calc = None
 		calc = self.comm.bcast(calc, root = self.MASTER)
@@ -211,8 +219,16 @@ class Lifetime(object):
 			if self.debug :
 				print('\n* Reading wave-function coefficients from WAVECAR.', flush = True)
 				print
+
+		t = -time.time()
 		self.wavecoef()
-		
+		t += time.time()
+
+		if self.comm.rank == self.MASTER:
+			if self.debug :
+				print('Done in ',t,'s.', flush = True)
+				print
+
 		# dV multiplied by the Vcell, since VaspChargeDensity normalize charge by Vcell
 		self.dV *= LA.det(self.cell)
 		
@@ -222,8 +238,22 @@ class Lifetime(object):
 		self.WF3D = None
 		if self.comm.rank == self.WFNODE:
 			self.WF3D = np.zeros((self.nspin,self.kptlist.shape[0],self.bandlist.shape[0],self.rs[0],self.rs[1],self.rs[2]),dtype='complex64')
-			#print(np.shape(self.WF3D))
-			#pass
+
+		if self.comm.rank == self.WFNODE :
+			if os.path.isfile(self.WFfile) :
+				print("\n* Reading unwrapped Wave Function values.",flush = True)
+				t = -time.time()
+				file = open(self.WFfile,'rb')
+				while 1:
+					try:
+						spin,idk,idn,phi3d = pickle.load(file)
+					except EOFError:
+						break
+					self.WF3D[spin][idk][idn] = phi3d
+				file.close()
+				t += time.time()
+				print('Done in ',t,'s.', flush = True)
+
 
 		##########################################################################################################################
 
@@ -471,7 +501,7 @@ class Lifetime(object):
 	def WFunwrap(self,s,k,n):
 		spin = s
 		rs = self.rs
-		phi3d = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
+		phi3d = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
 
 		if self.comm.rank == self.MASTER:
 			idk = np.where(self.wf.ids[spin] == k)[0][0]
@@ -484,7 +514,6 @@ class Lifetime(object):
 
 		iscached = False
 		if self.comm.rank == self.WFNODE :
-			#print(np.shape(self.WF3D[spin][idk][idn]),np.shape(self.WF3D))
 			if self.WF3D[spin][idk][idn][0][0][0] :
 				iscached = True
 				phi3d = self.WF3D[spin][idk][idn]
@@ -500,7 +529,7 @@ class Lifetime(object):
 			nplane = self.wf.nplane[spin][idk]
 			# [0,:] since otherwise it returns as 2d array
 			#coeff = np.asarray(self.wf.coeff[spin][idk][idn][0,:],dtype=np.complex128)
-			coeff = np.asarray(self.wf.coeff[spin][idk][idn],dtype=np.complex128)
+			coeff = np.asarray(self.wf.coeff[spin][idk][idn],dtype=np.complex64)
 			Vcell = self.wf.Vcell
 		else:
 			kpt = None
@@ -518,9 +547,12 @@ class Lifetime(object):
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs,  phi3d)
 
 		if self.comm.rank == self.WFNODE :
-			#print(idk,idn,np.shape(self.WF3D[spin][idk][idn]),np.shape(self.WF3D[spin]),np.shape(self.WF3D),"AAA")
+			#save phi to array
 			self.WF3D[spin][idk][idn] = phi3d
-			#print(idk,idn,np.shape(self.WF3D[spin][idk][idn]),np.shape(self.WF3D[spin]),np.shape(self.WF3D))
+			# append new value
+			file = open(self.WFfile,'ab')
+			pickle.dump([spin,idk,idn,phi3d], file)
+			file.close()
 
 		return phi3d
 
@@ -533,10 +565,10 @@ class Lifetime(object):
 
 		rs = self.rs 
 
-		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
-		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex128')
-		phi_i_itp = np.zeros((r[0],r[1],r[2]),dtype='complex128')
-		phi_f_itp = np.zeros((r[0],r[1],r[2]),dtype='complex128')
+		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
+		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
+		phi_i_itp = np.zeros((r[0],r[1],r[2]),dtype='complex64')
+		phi_f_itp = np.zeros((r[0],r[1],r[2]),dtype='complex64')
 
 		phi_i = self.WFunwrap(spin,ki,ni)
 		phi_i_itp = self.interpolate_fft(phi_i,s)
@@ -545,19 +577,19 @@ class Lifetime(object):
 
 		# x y z - indeces of points in the local potential array
 		#interpolated
-		Trank = 0.0
-		for idx in range(self.comm.rank, int(r[0]*r[1]*r[2]), self.comm.size):
-			# convert common index to dimention indexes
-			z = int(  idx / (r[1]*r[2])           )
-			y = int( (idx - z *r[1]*r[2]) / r[0] )
-			x = int( (idx - z *r[1]*r[2]) % r[0] )
-			Trank += np.conj( phi_f_itp[x][y][z] ) * self.dV[x][y][z] * phi_i_itp[x][y][z]
-		
-		T = self.comm.allreduce(Trank,op=MPI.SUM)
-		T  *= self.dr[0] * self.dr[1] * self.dr[2]
+		#Trank = 0.0
+		#for idx in range(self.comm.rank, int(r[0]*r[1]*r[2]), self.comm.size):
+		#	# convert common index to dimention indexes
+		#	z = int(  idx / (r[1]*r[2])           )
+		#	y = int( (idx - z *r[1]*r[2]) / r[0] )
+		#	x = int( (idx - z *r[1]*r[2]) % r[0] )
+		#	Trank += np.conj( phi_f_itp[x][y][z] ) * self.dV[x][y][z] * phi_i_itp[x][y][z]
+		#
+		#T = self.comm.allreduce(Trank,op=MPI.SUM)
+		#T  *= self.dr[0] * self.dr[1] * self.dr[2]
 
 		#calculate scattering
-		#T = phi.T(phi_f_itp,self.dV,phi_i_itp) * self.dr[0] * self.dr[1] * self.dr[2]
+		T = phi.T(phi_f_itp,self.dV,phi_i_itp) * self.dr[0] * self.dr[1] * self.dr[2]
 
 		if self.comm.rank == self.MASTER :
 			print('\t<{},{}|V|{},{}> = {:e}'.format(kf,nf,ki,ni,abs(T)))
@@ -609,12 +641,16 @@ class Lifetime(object):
 
 		# loop over all initial energy levels
 		for ni in self.bandlist:
+		
+			#if ni < nf: continue
 
 			# scatering coefficient for n-th k-point
 			R_n = 0.0
 
 			# loop over initial k-points in IBZ
 			for iki in self.kptlist:
+			
+				#if iki < ikf: continue
 
 				# 3 find if we in proximity of Ef
 				if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni] == 1.0) : continue
@@ -632,12 +668,8 @@ class Lifetime(object):
 				
 				if not self.T2[init,final]:
 
-					#check for initial WF
-					#	calculate initial WF
-					#check for final WF
-					#	calculate final WF
-
 					t0 = -time.time()
+					#directional symmetry
 					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(spin,iki,ni,ikf,nf) ),2.0)
 					t0 += time.time()
 					if self.comm.rank == self.MASTER :
@@ -651,6 +683,7 @@ class Lifetime(object):
 				# sum over all reflections of reduced K-point
 				kpts = np.where(self.ibz2fbz == iki)[0]
 				if self.comm.rank == self.MASTER : print("\tAdding",kpts.shape[0],"kpti reflections")
+
 				for ki in kpts:
 
 					# 4 get FBZ - interpolated FBZ number correspondence for group velocity
@@ -664,9 +697,16 @@ class Lifetime(object):
 					costheta = np.dot(a,b)/(an * bn)
 					if (costheta == 1.0): continue
 
+					#time directional symmetry
+					#if (iki==ikf and ni == nf ):
+					#	k = 1.0
+					#else:
+					#	k = 2.0
+
 					# 8 sum integral over bands
-					if self.comm.rank == self.MASTER :
-						R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+					#R_n += k * T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+					R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+
 
 			# sum over K-points
 			R += R_n
@@ -714,6 +754,7 @@ class Lifetime(object):
 
 				kpts = np.where(self.ibz2fbz == ikf)[0]
 				if self.comm.rank == self.MASTER : print("Adding",kpts.shape[0],"kptf reflections")
+				
 				for kf in kpts:
 					#for kf in np.where(self.ibz2fbz == ikf)[0]:
 					vel = self.vel[kf][nf]
@@ -725,6 +766,8 @@ class Lifetime(object):
 
 					if self.comm.rank == self.MASTER :
 						mob += tau * self.dFdE(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
+				
+
 
 		
 		if self.comm.rank == self.MASTER :
