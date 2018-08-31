@@ -45,7 +45,7 @@ class Lifetime(object):
 		self.comm = MPI.COMM_WORLD
 
 		self.MASTER = 0
-		self.WFNODE = self.comm.Get_size()-1
+		self.WFNODE = 0 #self.comm.Get_size()-1
 
 		self.debug = debug
 		self.restart = restart
@@ -236,8 +236,8 @@ class Lifetime(object):
 		# creatimg array for real space WaveFunction values
 		# here we might want to keep it not on the master node
 		self.WF3D = None
-		if self.comm.rank == self.WFNODE:
-			self.WF3D = np.zeros((self.nspin,self.kptlist.shape[0],self.bandlist.shape[0],self.rs[0],self.rs[1],self.rs[2]),dtype='complex64')
+		#if self.comm.rank == self.WFNODE:
+		self.WF3D = np.zeros((self.nspin,self.kptlist.shape[0],self.bandlist.shape[0],self.rs[0],self.rs[1],self.rs[2]),dtype='complex64')
 
 		if self.comm.rank == self.WFNODE :
 			if os.path.isfile(self.WFfile) :
@@ -253,6 +253,7 @@ class Lifetime(object):
 				file.close()
 				t += time.time()
 				print('Done in ',t,'s.', flush = True)
+		#self.comm.bcast(self.WF3D, root = self.WFNODE)
 
 
 		##########################################################################################################################
@@ -516,12 +517,13 @@ class Lifetime(object):
 		if self.comm.rank == self.WFNODE :
 			if self.WF3D[spin][idk][idn][0][0][0] :
 				iscached = True
-				phi3d = self.WF3D[spin][idk][idn]
+				#phi3d = self.WF3D[spin][idk][idn]
 
 		iscached = self.comm.bcast(iscached, root = self.WFNODE)
 		if iscached :
-			phi3d = self.comm.bcast(phi3d, root = self.WFNODE)
-			return phi3d
+			#phi3d = self.comm.bcast(phi3d, root = self.WFNODE)
+			#return phi3d
+			return
 
 		if self.comm.rank == self.MASTER:
 			kpt = self.wf.kpt[spin][idk]
@@ -546,50 +548,51 @@ class Lifetime(object):
 
 		phi.phi_skn(kpt, igall, nplane, coeff, Vcell, rs,  phi3d)
 
+		self.WF3D[spin][idk][idn] = phi3d
+
 		if self.comm.rank == self.WFNODE :
 			#save phi to array
-			self.WF3D[spin][idk][idn] = phi3d
+			#self.WF3D[spin][idk][idn] = phi3d
 			# append new value
 			file = open(self.WFfile,'ab')
 			pickle.dump([spin,idk,idn,phi3d], file)
 			file.close()
 
-		return phi3d
+		#return phi3d
+		return
 
-	def T(self, spin, ki, ni, kf, nf):
+	def WF(self):
+		"Precalculate all WFs"
+		if self.comm.rank == self.MASTER :
+			print( 'Precalculating Wave Functions', flush = True)
+		rs = self.rs
+		spin=0
+
+		for k in self.kptlist:
+			if self.comm.rank == self.MASTER : print( 'k =', k, ', n = ', end='', flush = True)
+			for n in self.bandlist:
+				#phi = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
+				self.WFunwrap(spin,k,n)
+				if self.comm.rank == self.MASTER : print( n, " ", end='', flush = True)
+			if self.comm.rank == self.MASTER : print("\n",flush = True)
+		return 0
+
+	def T(self, phi_i, phi_f):
 		"Calculate scattering matrix element, can be compex. ki - initial K-point, ni - initial energy band"
 
 		T = 0.0
-		s = self.scale #scale of the local potential array
+		#s = self.scale #scale of the local potential array
 		r = self.r
+		#rs = self.rs
 
-		rs = self.rs 
+		phi_i_itp = self.interpolate_fft(phi_i,self.scale)
+		phi_f_itp = self.interpolate_fft(phi_f,self.scale)
 
-		phi_i = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
-		phi_f = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
-		phi_i_itp = np.zeros((r[0],r[1],r[2]),dtype='complex64')
-		phi_f_itp = np.zeros((r[0],r[1],r[2]),dtype='complex64')
-
-		phi_i = self.WFunwrap(spin,ki,ni)
-		phi_i_itp = self.interpolate_fft(phi_i,s)
-		phi_f = self.WFunwrap(spin,kf,nf)
-		phi_f_itp = self.interpolate_fft(phi_f,s)
-
-		# x y z - indeces of points in the local potential array
-		#interpolated
-		#Trank = 0.0
-		#for idx in range(self.comm.rank, int(r[0]*r[1]*r[2]), self.comm.size):
-		#	# convert common index to dimention indexes
-		#	z = int(  idx / (r[1]*r[2])           )
-		#	y = int( (idx - z *r[1]*r[2]) / r[0] )
-		#	x = int( (idx - z *r[1]*r[2]) % r[0] )
-		#	Trank += np.conj( phi_f_itp[x][y][z] ) * self.dV[x][y][z] * phi_i_itp[x][y][z]
-		#
-		#T = self.comm.allreduce(Trank,op=MPI.SUM)
-		#T  *= self.dr[0] * self.dr[1] * self.dr[2]
-
-		#calculate scattering
-		T = phi.T(phi_f_itp,self.dV,phi_i_itp) * self.dr[0] * self.dr[1] * self.dr[2]
+		for x in range(r[0]):
+			for y in range(r[1]):
+				for z in range(r[2]):
+					T += np.conj( phi_f_itp[x][y][z] ) * self.dV[x][y][z] * phi_i_itp[x][y][z]
+		T  *= self.dr[0] * self.dr[1] * self.dr[2]
 
 		if self.comm.rank == self.MASTER :
 			print('\t<{},{}|V|{},{}> = {:e}'.format(kf,nf,ki,ni,abs(T)))
@@ -623,109 +626,184 @@ class Lifetime(object):
 			
 			#save matrix
 			sps.save_npz(self.T2file, data_save)
-			#pass
-
-
 
 	def R(self,kf,nf):
 		"Get inverse lifetime for state n, k"
-		ikf = kf # we already supply only indeces from IBZ
 
 		hbar = 4.135667662e-15 # eV*s
 
 		# initial value for scattering rate for kf nf
 		R = 0.0
+		R_n = 0.0
 		dk = self.dk # unitless 0..2pi
-
 		spin = 0
+		T2 = 0.0
 
-		# loop over all initial energy levels
-		for ni in self.bandlist:
-		
-			#if ni < nf: continue
 
-			# scatering coefficient for n-th k-point
-			R_n = 0.0
 
-			# loop over initial k-points in IBZ
-			for iki in self.kptlist:
-			
-				#if iki < ikf: continue
+		# SPREAD ARRAY WF3D
+		if self.comm.rank == self.MASTER:
+			slave_rank = -1
+			issend = 1 # 1 send, -1 receive
+			idx = 0
+			idx_start = 0
+			jobtime = np.zeros(self.comm.size, dtype = np.double)
 
-				# 3 find if we in proximity of Ef
-				if (self.occ[iki][ni] == 0.0 or self.occ[iki][ni] == 1.0) : continue
+			id_kf = np.where(self.wf.ids[spin] == kf)[0][0]
+			id_nf = np.where(self.bandlist == nf)[0][0]
 
-				# 7 get eigenstates
-				ei = self.ene[iki][ni]
-				ef = self.ene[ikf][nf] 
-				
-				#if abs(ei - ef) > self.sigma*self.ds: 
-				#	continue
+			# loop over all initial energy levels at all K-points
+			while idx < self.bandlist.shape[0] * self.kptlist.shape[0]:
+				id_ni = idx % self.bandlist.shape[0]
+				id_ki = int((idx - id_ni) /  self.bandlist.shape[0])
 
-				# 6 check if we have cached value for calculated T element
-				init = iki*self.nbands + ni
-				final = ikf*self.nbands + nf
-				
-				if not self.T2[init,final]:
+				ki = self.kptlist[id_ki]
+				ni = self.bandlist[id_ni]
+				#print(idx,idx_start,issend,flush=True)
+				id_ki = np.where(self.wf.ids[spin] == ki)[0][0]
+				id_ni = np.where(self.bandlist == ni)[0][0]
 
-					t0 = -time.time()
-					#directional symmetry
-					self.T2[init,final] = self.T2[final,init] = pow(abs( self.T(spin,iki,ni,ikf,nf) ),2.0)
-					t0 += time.time()
-					if self.comm.rank == self.MASTER :
-						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final]),'eV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s' ,int(t0*100.0)/100.0,'s', flush=True)
+				#find if we in proximity of Ef
+				if (idx != self.bandlist.shape[0] * self.kptlist.shape[0]-1 ) and (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0) :
+					idx += 1
+					continue
+
+				init = ki*self.nbands + ni
+				final = kf*self.nbands + nf
+
+				if self.T2[init,final]:
+					T2_cashed = True
 				else:
-					if self.comm.rank == self.MASTER :
-						print('\tT(', iki, ni, '=>', ikf, nf, ') =', sqrt(self.T2[init,final]),'eV, R =', 2.0*pi/hbar*self.T2[init,final]*self.DDelta(ef - ei), 'eV/s REUSE', flush=True)
-				T2 = self.T2[init,final]
+					T2_cashed = False
+
+				if T2_cashed:
+					if issend < 0:
+						T2 = self.T2[init,final]
+						print('\tT(',ki,ni,'=>\t',kf,nf,') =',sqrt(T2),'eV,\tR =', 2.0*pi/hbar*T2,'eV/s REUSE ',end='',flush=True)
+				else:
+
+					slave_rank+=1
+					if slave_rank == self.MASTER: slave_rank+=1 #skip the master node
+
+					# find if the border of data chank or the border of tasks reached
+					if ( slave_rank >= self.comm.size ) or ( idx==self.bandlist.shape[0] * self.kptlist.shape[0]-1 ):
+						# rewind idx to the beginning of the batch to receive data
+						if issend > 0:
+							idx_temp = idx
+							idx = idx_start
+							idx_start = idx_temp
+						else:
+							pass
+
+						if (idx==self.bandlist.shape[0] * self.kptlist.shape[0]-1) and (issend > 0):
+							issend = 0 #all job is done
+							idx=self.bandlist.shape[0] * self.kptlist.shape[0]
+						else:
+							#change between send and recv modes
+							issend *= -1
+						
+						slave_rank = -1
+						continue
+
+					# distribute batch of jobs
+					if issend > 0:
+						#establish communication with a free slave
+						jobtime[slave_rank] = -time.time()
+						req_alert = self.comm.isend(idx, dest=slave_rank, tag=slave_rank)
+
+						#Send data to slave
+						buf_phi_i = np.ascontiguousarray(self.WF3D[spin][id_ki][id_ni].reshape(-1), dtype = np.complex64)
+						req_phi_i = self.comm.Isend([buf_phi_i,self.rs[0]*self.rs[1]*self.rs[2],MPI.COMPLEX], dest=slave_rank, tag=idx)
+						buf_phi_f = np.ascontiguousarray(self.WF3D[spin][id_kf][id_nf].reshape(-1), dtype = np.complex64)
+						req_phi_f = self.comm.Isend([buf_phi_f,self.rs[0]*self.rs[1]*self.rs[2],MPI.COMPLEX], dest=slave_rank, tag=idx+1e5)
+
+					if issend < 0:
+						#if all distributed, wait and collect a batch of calculated values
+						buf_T2 = np.zeros(2, dtype = np.double)
+						req_T2 = self.comm.irecv(buf_T2, source=slave_rank, tag=idx)
+						while not req_T2.Get_status() :
+							time.sleep(0.01)
+						T2 = req_T2.wait()
+						self.T2[init,final] = self.T2[final,init] = T2
+						
+						jobtime[slave_rank] += time.time()
+						print('\tT(',ki,ni,'=>\t',kf,nf,') =',sqrt(T2),'eV,\tR =', 2.0*pi/hbar*T2,'eV/s',int(jobtime[slave_rank]*100.0)/100.0,'s ',end='',flush=True)
+
+				# if we received or used cached T2
+				#if ((issend < 0) or (T2_cashed and issend > 0)) and not (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0):
+				if issend < 0 and not (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0):
+					# sum over all reflections of reduced K-point
+					R_n = 0.0
+					kpts = np.where(self.ibz2fbz == ki)[0]
+					print("\tAdding",kpts.shape[0],"kpti reflections",flush=True)
+					for ki in kpts:
+						# 4 get FBZ - interpolated FBZ number correspondence for group velocity
+						a = self.vel[ki][ni]
+						b = self.vel[kf][nf]
+						an = LA.norm(a)
+						bn = LA.norm(b)
+						# 5 check for zero group velocity
+						if (not an or not bn): continue
+						costheta = np.dot(a,b)/(an * bn)
+						if (costheta == 1.0): continue
+						de = 0 #de = ef - ei
+						R_n += T2 * self.DDelta(de) * (1.0 - costheta) # (eV)^2
+					R += R_n
+
+				idx += 1
+
+			# distribute exit command to the slave nodes
+			for slave_rank in range(0, self.comm.size):
+				if slave_rank == self.MASTER: continue
+				req_alert = self.comm.isend(-1, dest=slave_rank, tag=slave_rank)
+
+		else:
+			idx=0
+			while idx >= 0 :
 				
+				req_idx = self.comm.irecv(source=self.MASTER,tag=self.comm.rank)
+				while not req_idx.Get_status() :
+					time.sleep(0.01)
+				idx = req_idx.wait()
 
-				# sum over all reflections of reduced K-point
-				kpts = np.where(self.ibz2fbz == iki)[0]
-				if self.comm.rank == self.MASTER : print("\tAdding",kpts.shape[0],"kpti reflections")
-
-				for ki in kpts:
-
-					# 4 get FBZ - interpolated FBZ number correspondence for group velocity
-					a = self.vel[ki][ni]
-					b = self.vel[kf][nf]
-					an = LA.norm(a)
-					bn = LA.norm(b)
-
-					# 5 check for zero group velocity
-					if (not an or not bn): continue
-					costheta = np.dot(a,b)/(an * bn)
-					if (costheta == 1.0): continue
-
-					#time directional symmetry
-					#if (iki==ikf and ni == nf ):
-					#	k = 1.0
-					#else:
-					#	k = 2.0
-
-					# 8 sum integral over bands
-					#R_n += k * T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
-					R_n += T2 * self.DDelta(ef - ei) * (1.0 - costheta) # (eV)^2
+				if idx >= 0:
+					
+					buf_phi_i = np.empty(self.rs[0]*self.rs[1]*self.rs[2] , dtype = np.complex64)
+					req_phi_i = self.comm.Irecv([buf_phi_i,self.rs[0]*self.rs[1]*self.rs[2],MPI.COMPLEX], source=self.MASTER, tag=idx)
+					while not req_phi_i.Get_status() :
+						time.sleep(0.01)
+					req_phi_i.Wait()
+					phi_i = buf_phi_i.reshape(self.rs[0], self.rs[1], self.rs[2])
 
 
-			# sum over K-points
-			R += R_n
-		
+					buf_phi_f = np.empty( int(self.rs[0]*self.rs[1]*self.rs[2]) , dtype = np.complex64)
+					req_phi_f = self.comm.Irecv([buf_phi_f,self.rs[0]*self.rs[1]*self.rs[2],MPI.COMPLEX], source=self.MASTER, tag=idx+1e5)
+					while not req_phi_f.Get_status() :
+						time.sleep(0.01)
+					req_phi_f.Wait()
+					phi_f = buf_phi_f.reshape(self.rs[0], self.rs[1], self.rs[2])
+
+					T2=float(pow(abs(self.T(phi_i, phi_f)),2))
+					#return to master
+					req_T2 = self.comm.isend(T2, dest=self.MASTER, tag=idx)
+
 		#print("Preaparing to exit R",self.comm.rank,nf,kf)
 		if self.comm.rank == self.MASTER :
 			R = (self.natoms / self.nd)  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
-			#R = self.nd * (2.0 * pi/hbar * R ) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
-			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s', flush = True)
-			# save updatet T matrix here ##################################################################################################
+			print( 'R(k=', kf, 'n=', nf, ') = ', R, 'eV/s. ',end='', flush = True)
+			# save updated T2 matrix
 			self.saveT2()
-		else:
-			pass
+		
+		
 
 		return R
+
 
 	def mobility(self):
 		"Carrier mobility calculation, sum over all bands of integrals over all K-points"
 		# step of K-mesh in reciprocal space, kx=ky=kz number of k points in each direction
+		
+		self.WF()
 		dk = self.dk # unitless, 0..2pi/N
 
 		mob = 0.0
@@ -753,8 +831,8 @@ class Lifetime(object):
 				# sum over all reflections of reduced K-point
 
 				kpts = np.where(self.ibz2fbz == ikf)[0]
-				if self.comm.rank == self.MASTER : print("Adding",kpts.shape[0],"kptf reflections")
-				
+				if self.comm.rank == self.MASTER : print("Adding",kpts.shape[0],"kptf reflections\n",flush = True)
+
 				for kf in kpts:
 					#for kf in np.where(self.ibz2fbz == ikf)[0]:
 					vel = self.vel[kf][nf]
@@ -766,10 +844,7 @@ class Lifetime(object):
 
 					if self.comm.rank == self.MASTER :
 						mob += tau * self.dFdE(kf,nf) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
-				
 
-
-		
 		if self.comm.rank == self.MASTER :
 			return (-2.0 * self.e / self.nelect) * mob * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
 			#return (-2.0 * self.e / self.ncarr) * mob  # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
