@@ -524,13 +524,13 @@ class Lifetime(object):
 			#phi3d = self.comm.bcast(phi3d, root = self.WFNODE)
 			#return phi3d
 			return
+			
+
 
 		if self.comm.rank == self.MASTER:
 			kpt = self.wf.kpt[spin][idk]
 			igall = self.wf.igall[spin][idk]
 			nplane = self.wf.nplane[spin][idk]
-			# [0,:] since otherwise it returns as 2d array
-			#coeff = np.asarray(self.wf.coeff[spin][idk][idn][0,:],dtype=np.complex128)
 			coeff = np.asarray(self.wf.coeff[spin][idk][idn],dtype=np.complex64)
 			Vcell = self.wf.Vcell
 		else:
@@ -571,7 +571,7 @@ class Lifetime(object):
 		for k in self.kptlist:
 			if self.comm.rank == self.MASTER : print( 'k =', k, ', n = ', end='', flush = True)
 			for n in self.bandlist:
-				#phi = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
+				if self.occ[k][n] == 1.0 or self.occ[k][n] == 0.0 : continue
 				self.WFunwrap(spin,k,n)
 				if self.comm.rank == self.MASTER : print( n, " ", end='', flush = True)
 			if self.comm.rank == self.MASTER : print("\n",flush = True)
@@ -664,7 +664,7 @@ class Lifetime(object):
 				id_ni = np.where(self.bandlist == ni)[0][0]
 
 				#find if we in proximity of Ef
-				if (idx != self.bandlist.shape[0] * self.kptlist.shape[0]-1 ) and (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0) :
+				if (idx != self.bandlist.shape[0] * self.kptlist.shape[0]-1 ) and (self.occ[ki][ni] <= 0.01 or self.occ[ki][ni] >= 0.99) :
 					idx += 1
 					continue
 
@@ -731,7 +731,7 @@ class Lifetime(object):
 
 				# if we received or used cached T2
 				#if ((issend < 0) or (T2_cashed and issend > 0)) and not (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0):
-				if issend < 0 and not (self.occ[ki][ni] == 0.0 or self.occ[ki][ni] == 1.0):
+				if issend < 0 and not (self.occ[ki][ni] <= 0.01 or self.occ[ki][ni] >= 0.99):
 					# sum over all reflections of reduced K-point
 					R_n = 0.0
 					kpts = np.where(self.ibz2fbz == ki)[0]
@@ -816,7 +816,7 @@ class Lifetime(object):
 				#ikf = self.ibz2fbz[kf]
 
 				# 3 find if we in proximity of Ef
-				if (self.occ[ikf][nf] == 0.0 or self.occ[ikf][nf]==1.0): continue
+				if (self.occ[ikf][nf] <= 0.01 or self.occ[ikf][nf] >= 0.99): continue
 
 				vel = self.vel[ikf][nf]
 				# check for [0,0,0] velocity
