@@ -820,9 +820,8 @@ class Lifetime(object):
 					if (costheta != 1.0): R_if += (1.0 - costheta) # (eV)^2
 				R_i += R_if * self.T2[init,final]
 
-			#R = (self.natoms / self.nd)  * (2.0 * pi/hbar * R ) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			R_i *= (self.natoms / self.nd)  * (2.0 * pi/hbar) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
 			if self.comm.rank == self.MASTER: print( 'R(k=', ki, 'n=', ni, ') = ', R_i, 'eV/s. ',end='', flush = True)
-
 
 			# check for null division
 			if not R_i:
@@ -839,7 +838,8 @@ class Lifetime(object):
 				proj2 = np.dot(v_i,[1,0,0]) * 1e5 # projection of group velocity on current direction
 				self.mob[spin] += tau * self.dFdE(ki_rfl,ni) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
-		self.mob[spin] *= (-2.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
+		self.mob[spin] *= (-1.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs no spin degeneracy
+		#self.mob[spin] *= (-2.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
 
 		if self.comm.rank == self.MASTER:
 			print("Done in",int(total_time + time.time()),"s.")
@@ -904,7 +904,7 @@ def main(nf = 0, kf = 0):
 		print("Mobility of 1 electron over 1 defect :", mob * 1e-4,' cm2/Vs') # convert from m2 to cm2
 		print("Resistivity for ",ncarr,"el/cm3 and ",ndef,"defects/cm3 is:", ndef / (ncarr * q * mob)," Omh.m")
 		print("Real space reduction ",lt.scale,'- fold')
-		print("Total data calculation",int(calc_time + time.time()),'s, total time',int(total_time + time.time())," Ncores:",lt.comm.size, flush = True)
+		print("Total data calculation",int(calc_time + time.time()),'s, total time',int(total_time + time.time()),"s. Ncores:",lt.comm.size, flush = True)
 
 	return 0
 
