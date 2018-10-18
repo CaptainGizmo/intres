@@ -186,8 +186,8 @@ class Lifetime(object):
 		for kpt in range(self.inkpt):
 			flag = 0
 			for n in self.bandlist:
-				#if (self.occ[kpt][n] == 0.0 or self.occ[kpt][n] == 1.0) : continue
-				if (self.occ[kpt][n] <= 0.01 or self.occ[kpt][n] >= 0.99) : continue
+				if (self.occ[kpt][n] == 0.0 or self.occ[kpt][n] == 1.0) : continue
+				#if (self.occ[kpt][n] <= 0.01 or self.occ[kpt][n] >= 0.99) : continue
 				flag = 1
 			if flag:
 				if self.comm.rank == self.MASTER:
@@ -687,7 +687,8 @@ class Lifetime(object):
 				init = ki*self.nbands + ni
 				final = kf*self.nbands + nf
 
-				if self.T2[init,final] and issend > 0:
+				#if self.T2[init,final] and issend > 0:
+				if self.T2[init,final] :
 					T2_cashed = True
 				else:
 					T2_cashed = False
