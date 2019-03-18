@@ -318,6 +318,28 @@ class VaspKpointsInterpolated:
         print("parsing eigen energies and group velocities")
         self.energies = []
         self.velocities = []
+        # eigenvalues/array/set/ set "spin 1"/ set "kpoint 1"###############################################################
+        for spin in block.findall('eigenvalues/array/*/set'):
+            if 'spin' in spin.attrib['comment']:
+                energies = []
+                velocities = []
+                for element in spin.findall('set'):
+                    if 'kpoint' in element.attrib['comment']:
+                        en = []
+                        vel = []
+                        for v in list(element):
+                            en.append(float(v.text.split()[0]))
+                            vel.append([float(x) for x in v.text.split()[1:]])
+                        energies.append(en)
+                        velocities.append(vel)
+            self.energies.append(energies)
+            self.velocities.append(velocities)
+
+        self.energies = np.array(self.energies)
+        self.velocities = np.array(self.velocities)
+        self.nbands = len(self.energies[0][0])
+
+        """
         for element in block.findall('eigenvalues/array/*/*/set'):
             if 'kpoint' in element.attrib['comment']:
                 en = []
@@ -331,6 +353,7 @@ class VaspKpointsInterpolated:
         self.energies = np.array(self.energies)
         self.velocities = np.array(self.velocities)
         self.nbands = len(self.energies[0])
+        """
 
         # 6) extract occupancies
         for block in xmldoc.findall("calculation/eigenvalues"):
@@ -348,6 +371,22 @@ class VaspKpointsInterpolated:
         #if self.comm.rank == 0: 
         print("parsing occupancies")
         self.populations = []
+        for spin in block.findall('array/*/set'):
+            if 'spin' in spin.attrib['comment']:
+                populations = []
+                for element in spin.findall('set'):
+                    if 'kpoint' in element.attrib['comment']:
+                        en = []
+                        pop = []
+                        for v in list(element):
+                            pop.append(float(v.text.split()[1]))
+                    populations.append(pop)
+                self.populations.append(populations)
+        self.populations = np.array(self.populations)
+
+        #print("Found",self.populations.shape,"occupancies")
+
+        """
         for element in block.findall('array/*/*/set'):
             if 'kpoint' in element.attrib['comment']:
                 en = []
@@ -357,6 +396,7 @@ class VaspKpointsInterpolated:
                 self.populations.append(pop)
         self.populations = np.array(self.populations)
         #print("Found",self.populations.shape,"occupancies")
+        """
 
         # ===========================================================
 

@@ -20,19 +20,22 @@ class ibz2fbz:
         nitpi2f = None
         itpi2f = None
         i2f = []
+        ni2f = []
 
         for n,line in enumerate(f):
             if 'k-points in 1st BZ' in line:
                 #initiate temporary array
-                self.nitpi2f = np.array(i2f)
+                self.nitpi2f = np.array(ni2f)
                 i2f = []
 
             if 'KPOINTS_INTER' in line:
                 # save the first array
-                self.nitpi2f = np.array(i2f)
+                self.nitpi2f = np.array(ni2f)
 
             if 't-inv' in line:
                 # read the mapping indeces
                 i2f.append(int(line.split()[4])-1)
+                ni2f.append((int(line.split()[4])-1,float(line.split()[0]),float(line.split()[1]),float(line.split()[2]),float(line.split()[3])))
 
         self.itpi2f = np.array(i2f)
+        #self.nitpi2f = np.array(ni2f)
