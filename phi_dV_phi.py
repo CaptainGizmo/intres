@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os,sys,time
 import subprocess
+import configparser
+import json
 import struct
 from ase import Atoms
 from ase.calculators.vasp import *
@@ -40,31 +42,30 @@ class Lifetime(object):
 			self.Vcell = 0
 			self.nband = nband
 
-	def __init__(self, debug = True, restart = True, scale = 1, nd = 1):
+	def __init__(self, config):
 		read_time = -time.time()
 		self.nspin = -1
-		self.nd = nd
-		self.comm = MPI.COMM_WORLD
-		self.mob = np.zeros(2,dtype='float64')
+		self.nd = config['nd']
+		self.vfield = config['vfield']
+		self.vcurr = config['vcurr']
+		self.ncarr =  config['ncarr']
+		self.debug = config['debug']
+		self.restart = config['restart']
+		self.scale = config['scale']
 
-		self.MASTER = 0
-		self.WFNODE = 0 #self.comm.Get_size()-1
-
-		self.debug = debug
-		self.restart = restart
-		# real space calculation reduction, calculate only every scale-th point
-		self.scale = scale
 		self.T2file = "data_sparse."+str(self.scale)+".npz"
 		self.WFfile = "WF_unwrap."+str(self.scale)+".npy"
+
+		self.comm = MPI.COMM_WORLD
+		self.mob = np.zeros(2,dtype='float64')
+		self.MASTER = 0
+		self.WFNODE = 0 #self.comm.Get_size()-1
 
 		# electron charge, since we work in eV units
 		#e = -1.6e-19 # coulomb
 		self.e = 1.0 # in electrons
 
 		# carriers per atomic site
-		# self.ncarr =  3. #Aluminum
-		#self.ncarr =  6. #Tungsten
-		self.ncarr = 8. #Iron
 
 		##########################################################################################################################
 		if self.comm.rank == self.MASTER:
@@ -84,7 +85,7 @@ class Lifetime(object):
 		# number of points in LOCPOT gives points for integral in RS
 		self.r = np.array(self.dV.shape, dtype='int_')
 		#number of reduce points in space
-		self.rs = np.array([int(self.r[0]/self.scale),int(self.r[1]/scale),int(self.r[2]/self.scale)],dtype='int_') 
+		self.rs = np.array([int(self.r[0]/self.scale),int(self.r[1]/self.scale),int(self.r[2]/self.scale)],dtype='int_') 
 
 		# calculate divergence of scattering potential
 		#self.divcharge = self.div()
@@ -847,23 +848,24 @@ class Lifetime(object):
 					if (costheta != 1.0): R_if += (1.0 - costheta) # (eV)^2
 				R_i += R_if * self.T2[init,final]
 
-			#R_i *= (self.natoms / self.nd)  * (2.0 * pi/hbar) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
-			R_i *= self.nd * (2.0 * pi/hbar) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			R_i *= (self.natoms / self.nd)  * (2.0 * pi/hbar) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
+			#R_i *= self.nd * (2.0 * pi/hbar) * (dk[0] * dk[1] * dk[2] / pow(2.0*pi,3.0)) # 1 * (1 / eVs) * (eV)^2 * 1 != eV/s
 			if self.comm.rank == self.MASTER: print( 'R(k=', ki, 'n=', ni, ') = ', R_i, 'eV/s. ',end='', flush = True)
 
 			# check for null division
 			if not R_i:
 				continue
 			else:
-				tau = 1.0 / R_i / self.natoms
+				#tau = 1.0 / R_i / self.natoms
+				tau = 1.0 / R_i
 
 			# sum over all reflections of reduced K-point
 			kpts = np.where(self.ibz2fbz == ki)[0]
 			if self.comm.rank == self.MASTER: print("Adding",kpts.shape[0],"kptf reflections\n",flush = True)
 			for ki_rfl in kpts:
 				v_i = self.vel[spin][ki_rfl][ni] # velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
-				proj1 = np.dot(v_i,[1,0,0]) * 1e5 # projection of group velocity on field direction
-				proj2 = np.dot(v_i,[1,0,0]) * 1e5 # projection of group velocity on current direction
+				proj1 = np.dot(v_i,self.vfield) * 1e5 # projection of group velocity on field direction
+				proj2 = np.dot(v_i,self.vcurr) * 1e5 # projection of group velocity on current direction
 				self.mob[spin] += tau * self.dFdE(spin,ki_rfl,ni) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
 
 		self.mob[spin] *= (-1.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs no spin degeneracy
@@ -911,32 +913,57 @@ def main(nf = 0, kf = 0):
 	comm = MPI.COMM_WORLD
 	rank = comm.Get_rank()
 
-	if len(sys.argv) > 1: 
-		scale =  int(sys.argv[1])
-		if rank == 0 : print("Reading scale factor for local potential 1 /", scale, flush = True)
+	if len(sys.argv) > 1:
+		config_file = sys.argv[1]
+	else:
+		config_file = "config.ini"
+	if rank == 0 : print("Reading configuration from", config_file, flush = True)
 
-	if len(sys.argv) > 2: 
-		nd =  float(sys.argv[2])
-		if rank == 0 : print("Reading number of defects in the system", nd *1e0, flush = True)
+	conf = configparser.ConfigParser()
+	conf.read(config_file)
 
+	# default
+	config = {'element': 'Unknown', \
+		'nelec': 1, \
+		'nd': 1, \
+		'ncarr': 1, \
+		'scale': 1, \
+		'vfield': [1,0,0], \
+		'vcurr': [1,0,0], \
+		'restart': False, \
+		'debug': True }
+
+	#if conf["config"]["element"]
+	config['element'] = conf["config"]["element"]
+	config['nelec'] = json.loads(conf["config"]["nelec"])
+	config['nd'] = json.loads(conf["config"]["nd"])
+	config['ncarr'] = json.loads(conf["config"]["ncarr"])
+	config['scale'] = json.loads(conf["config"]["scale"])
+	config['vfield'] = json.loads(conf["config"]["vfield"])
+	config['vcurr'] = json.loads(conf["config"]["vcurr"])
+
+	if rank == 0 :
+		print("Mobility calculation for the element {} with {} electrons per atom and {} carriers per m^3".format(config['element'],config['nelec'],config['ncarr']))
+		print("Declared number of defects in the supercell is {}, local potential scaling 1 / {}".format(config['nd'],config['scale']))
+		print("Electric field applied in {} direction, current carriers mobility along {} direction.".format(config['vfield'],config['vcurr']), flush = True)
 
 	total_time = -time.time()
-	lt = Lifetime(debug,restart,scale,nd)
+	lt = Lifetime(config)
 	calc_time = -time.time()
 	lt.mobility()
 
 	if lt.comm.rank == 0:
 
-		#ncarr = 18e28 #el/m3
-		ncarr = 7.31e27 # el/m3 W
+		#ncarr = 18e28 #el/m3 Al
+		#ncarr = 7.31e27 # el/m3 W
 		#ndef = 1e16  # N/m3 at 300K, formation en 0.7 eV
-		ndef = nd
+		#ndef = nd
 		q = 1.6e-19
 
 		mob = lt.mob.sum()
 		print("Mobility of 1 electron over 1 defect : {:E} cm2/Vs".format(mob * 1e-4)) # convert from m2 to cm2
-		print("Resistivity for {:E} el/m3 and {:E} defects/m3 is: {:E} Omh.m".format(ncarr,ndef, 1.0 / (ncarr * q * mob)))
-		print("Conductivity for {:E} el/m3 and {:E} defects/m3 is: {:E} S/m".format(ncarr,ndef,ncarr * q * mob))
+		print("Resistivity for {:E} el/m3 and {:E} defects/m3 is: {:E} Omh.m".format(config['ncarr'],config['nd'], 1.0 / (config['ncarr'] * q * mob)))
+		print("Conductivity for {:E} el/m3 and {:E} defects/m3 is: {:E} S/m".format(config['ncarr'],config['nd'],config['ncarr'] * q * mob))
 		print("Real space reduction ",lt.scale,'- fold')
 		print("Total data calculation",int(calc_time + time.time()),'s, total time',int(total_time + time.time()),"s. Ncores:",lt.comm.size, flush = True)
 
