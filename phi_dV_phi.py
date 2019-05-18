@@ -32,7 +32,7 @@ class Lifetime(object):
 	class wf():
 		def __init__(self,nspin,nkpt,npmax,nband):
 			# assign memory
-			self.ids = np.zeros([nspin,nkpt], dtype = 'int_')
+			self.ids = np.zeros([nspin,nkpt], dtype = 'int_') #obsolete, to delete
 			self.occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 			self.cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 			self.igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
@@ -44,7 +44,6 @@ class Lifetime(object):
 
 	def __init__(self, config):
 		read_time = -time.time()
-		self.nspin = -1
 		self.nd = config['nd']
 		self.vfield = config['vfield']
 		self.vcurr = config['vcurr']
@@ -52,6 +51,10 @@ class Lifetime(object):
 		self.debug = config['debug']
 		self.restart = config['restart']
 		self.scale = config['scale']
+		if not self.restart:
+			self.nspin = -1
+		else:
+			self.nspin = config['nspin']
 
 		self.T2file = "data_sparse."+str(self.scale)+".npz"
 		self.WFfile = "WF_unwrap."+str(self.scale)+".npy"
@@ -206,6 +209,18 @@ class Lifetime(object):
 				if self.debug:
 					print(len(self.kptlist[spin]),"points added from",self.inkpt)
 
+		########################################################################################################################
+		ckpt = []
+		for spin in range(self.nspin): ckpt.append(len(self.kptlist[spin]))
+		ckpt = np.amax(np.array(ckpt))
+		self.wf_ids = np.zeros([self.nspin,ckpt], dtype = 'int_')
+
+		for spin in range(self.nspin):
+			for ik in range(len(self.kptlist[spin])):
+				# get real number of Kpt
+				ikid = self.kptlist[spin][ik]
+				self.wf_ids[spin][ik] = ikid
+
 		##########################################################################################################################
 		if self.comm.rank == self.MASTER:
 			# cached value of scattering probability matrix (squared elements)
@@ -226,9 +241,14 @@ class Lifetime(object):
 			if self.debug :
 				print('\n* Reading wave-function coefficients from WAVECAR.', flush = True)
 				print
+			else:
+				print('\n* WAVECAR reading skipped, calculation restart *', flush = True)
+				print
+
 
 		read_time = -time.time()
-		self.wavecoef()
+		if not self.restart:
+			self.wavecoef()
 		if self.comm.rank == self.MASTER:
 			if self.debug :
 				print('Done in ',int(read_time + time.time()),'s.', flush = True)
@@ -429,7 +449,7 @@ class Lifetime(object):
 				# get real number of Kpt
 				ikid = self.kptlist[spin][ik]
 				if self.comm.rank == self.MASTER:
-					self.wf.ids[spin][ik] = ikid
+					self.wf_ids[spin][ik] = ikid
 				# search and read information about the band
 				recpos = (2 + ikid*(nband+1) + spin*nkpt*(nband+1)) * recl
 				f.seek(recpos)
@@ -537,10 +557,8 @@ class Lifetime(object):
 		phi3d = np.zeros((rs[0],rs[1],rs[2]),dtype='complex64')
 
 		if self.comm.rank == self.MASTER:
-			idk = np.where(self.wf.ids[spin] == k)[0][0]
+			idk = np.where(self.wf_ids[spin] == k)[0][0]
 			idn = np.where(self.bandlist[spin] == n)[0][0]
-			#print("wf ids",np.where(self.wf.ids[spin] == k)[0][0])
-			#print("band ids",np.where(self.bandlist[spin] == n)[0][0])
 		else:
 			idk = None
 			idn = None
@@ -549,7 +567,6 @@ class Lifetime(object):
 
 		iscached = False
 		if self.comm.rank == self.WFNODE :
-			#print("self.WF3Dlist",self.WF3Dlist.shape, spin, idk, idn)
 			if self.WF3Dlist[spin][idk][idn] >= 0 : # [0][0][0] :
 				iscached = True
 
@@ -604,7 +621,8 @@ class Lifetime(object):
 				for n in self.bandlist[spin]:
 					#print(self.occ[spin][k][n],flush = True)
 					if self.occ[spin][k][n] == 1.0 or self.occ[spin][k][n] == 0.0 : continue
-					self.WFunwrap(spin,k,n)
+					if not self.restart:
+						self.WFunwrap(spin,k,n)
 					if self.comm.rank == self.MASTER : print( n, " ", end='', flush = True)
 				if self.comm.rank == self.MASTER : print("",flush = True)
 
@@ -697,18 +715,10 @@ class Lifetime(object):
 					kf, nf = self.points[spin][id_out]
 
 					# convert from global ids to array ids
-					id_ki = np.where(self.wf.ids[spin] == ki)[0][0]
+					id_ki = np.where(self.wf_ids[spin] == ki)[0][0]
 					id_ni = np.where(self.bandlist[spin] == ni)[0][0]
-					id_kf = np.where(self.wf.ids[spin] == kf)[0][0]
+					id_kf = np.where(self.wf_ids[spin] == kf)[0][0]
 					id_nf = np.where(self.bandlist[spin] == nf)[0][0]
-
-					"""
-					vel = self.vel[kf][nf]
-					if(not LA.norm(vel)): # check for [0,0,0] velocity
-						idx += 1
-						#print('**')
-						continue
-					"""
 
 					# convert global ids to scattering matrix ids
 					init = ki*self.nbands + ni
@@ -931,7 +941,8 @@ def main(nf = 0, kf = 0):
 		'vfield': [1,0,0], \
 		'vcurr': [1,0,0], \
 		'restart': False, \
-		'debug': True }
+		'debug': True, \
+		'nspin': 1 }
 
 	#if conf["config"]["element"]
 	config['element'] = conf["config"]["element"]
@@ -941,11 +952,17 @@ def main(nf = 0, kf = 0):
 	config['scale'] = json.loads(conf["config"]["scale"])
 	config['vfield'] = json.loads(conf["config"]["vfield"])
 	config['vcurr'] = json.loads(conf["config"]["vcurr"])
+	
+	if 'restart' in conf['config']: config['restart'] = conf["config"].getboolean('restart')
+	
+	if config['restart']:
+		if 'nspin' in conf['config']: config['nspin'] = json.loads(conf["config"]["nspin"])
 
 	if rank == 0 :
 		print("Mobility calculation for the element {} with {} electrons per atom and {} carriers per m^3".format(config['element'],config['nelec'],config['ncarr']))
 		print("Declared number of defects in the supercell is {}, local potential scaling 1 / {}".format(config['nd'],config['scale']))
 		print("Electric field applied in {} direction, current carriers mobility along {} direction.".format(config['vfield'],config['vcurr']), flush = True)
+		if config['restart']: print("Restarting simulation without WAVECAR.")
 
 	total_time = -time.time()
 	lt = Lifetime(config)
