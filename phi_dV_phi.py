@@ -22,7 +22,7 @@ from mpi4py import MPI
 import pickle
 import phi
 
-from getsize import get_size
+#from getsize import get_size
 from VaspKpointsInterpolated import *
 from ibz2fbz import *
 
@@ -32,7 +32,7 @@ class Lifetime(object):
 	class wf():
 		def __init__(self,nspin,nkpt,npmax,nband):
 			# assign memory
-			self.ids = np.zeros([nspin,nkpt], dtype = 'int_') #obsolete, to delete
+			#self.ids = np.zeros([nspin,nkpt], dtype = 'int_') #obsolete, to delete
 			self.occ   = np.zeros([nspin,nkpt,nband], dtype = 'float64')
 			self.cener = np.zeros([nspin,nkpt,nband], dtype = 'complex128')
 			self.igall = np.zeros([nspin,nkpt,npmax,3],dtype='int_')
@@ -45,8 +45,8 @@ class Lifetime(object):
 	def __init__(self, config):
 		read_time = -time.time()
 		self.nd = config['nd']
-		self.vfield = config['vfield']
-		self.vcurr = config['vcurr']
+		self.vfield = config['vfield'] / LA.norm(config['vfield'])
+		self.vcurr = config['vcurr'] / LA.norm(config['vcurr'])
 		self.ncarr =  config['ncarr']
 		self.debug = config['debug']
 		self.restart = config['restart']
@@ -876,7 +876,9 @@ class Lifetime(object):
 				v_i = self.vel[spin][ki_rfl][ni] # velocity units A/fs = 1e-10 m / 1e-15 s = 1e5 m/s
 				proj1 = np.dot(v_i,self.vfield) * 1e5 # projection of group velocity on field direction
 				proj2 = np.dot(v_i,self.vcurr) * 1e5 # projection of group velocity on current direction
+				#if self.comm.rank == self.MASTER: print(v_i, self.vfield, self.vcurr, proj1/1e5, proj2/1e5, np.dot(proj1,proj2), "vvv")
 				self.mob[spin] += tau * self.dFdE(spin,ki_rfl,ni) * np.dot(proj1,proj2) #  s/eV * (m/s)^2 = m2/eVs
+				#if self.comm.rank == self.MASTER: print(self.mob[spin],"vvv")
 
 		self.mob[spin] *= (-1.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs no spin degeneracy
 		#self.mob[spin] *= (-2.0 * self.e / self.nelect) * (dk[0]*dk[1]*dk[2] / pow(2.0 * pi, 3.0)) # ( e / 1 ) * (m2/eVs) * 1 =  m2/Vs
@@ -942,6 +944,7 @@ def main(nf = 0, kf = 0):
 		'vcurr': [1,0,0], \
 		'restart': False, \
 		'debug': True, \
+		'ndef': 1e6, \
 		'nspin': 1 }
 
 	#if conf["config"]["element"]
@@ -979,8 +982,8 @@ def main(nf = 0, kf = 0):
 
 		mob = lt.mob.sum()
 		print("Mobility of 1 electron over 1 defect : {:E} cm2/Vs".format(mob * 1e-4)) # convert from m2 to cm2
-		print("Resistivity for {:E} el/m3 and {:E} defects/m3 is: {:E} Omh.m".format(config['ncarr'],config['nd'], 1.0 / (config['ncarr'] * q * mob)))
-		print("Conductivity for {:E} el/m3 and {:E} defects/m3 is: {:E} S/m".format(config['ncarr'],config['nd'],config['ncarr'] * q * mob))
+		print("Resistivity for {:E} el/m3 and {:E} defects/m3 is: {:E} Omh.m".format(config['ncarr'],config['ndef'], 1.0 / (config['ncarr'] * q * mob)))
+		print("Conductivity for {:E} el/m3 and {:E} defects/m3 is: {:E} S/m".format(config['ncarr'],config['ndef'],config['ncarr'] * q * mob))
 		print("Real space reduction ",lt.scale,'- fold')
 		print("Total data calculation",int(calc_time + time.time()),'s, total time',int(total_time + time.time()),"s. Ncores:",lt.comm.size, flush = True)
 
